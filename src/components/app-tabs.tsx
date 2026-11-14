@@ -1,32 +1,48 @@
-import { NativeTabs } from 'expo-router/native-tabs';
-import { useColorScheme } from 'react-native';
+import React from 'react';
+import { Pressable, Text, View } from 'react-native';
 
-import { Colors } from '@/constants/theme';
+const tabs = [
+  '1. Upload Invoice PDF',
+  '2. Invoice Details',
+  '3. Delivery Data',
+  '4. Reports',
+];
 
 export default function AppTabs() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const [activeTab, setActiveTab] = React.useState(0);
 
   return (
-    <NativeTabs
-      backgroundColor={colors.background}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{ selected: { color: colors.text } }}>
-      <NativeTabs.Trigger name="index">
-        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          src={require('@/assets/images/tabIcons/home.png')}
-          renderingMode="template"
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="explore">
-        <NativeTabs.Trigger.Label>Explore</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          src={require('@/assets/images/tabIcons/explore.png')}
-          renderingMode="template"
-        />
-      </NativeTabs.Trigger>
-    </NativeTabs>
+    <View
+      style={{
+        flexDirection: 'row',
+        backgroundColor: '#1c7d36',
+        padding: 12,
+        gap: 10,
+      }}
+    >
+      {tabs.map((tab, index) => (
+        <Pressable
+          key={tab}
+          onPress={() => setActiveTab(index)}
+          style={{
+            backgroundColor:
+              activeTab === index ? '#145c28' : 'transparent',
+            paddingVertical: 8,
+            paddingHorizontal: 12,
+            borderRadius: 4,
+          }}
+        >
+          <Text
+            style={{
+              color: 'white',
+              fontWeight: 'bold',
+              fontSize: 14,
+            }}
+          >
+            {tab}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
   );
 }
