@@ -23,7 +23,7 @@ export default function UploadInvoicePage() {
       files.forEach((file) => formData.append('invoices', file, file.name));
 
       const response = await axios.post(
-        'http://localhost:3000/upload_pdf',
+        'https://invoice-python-api-q2oq.onrender.com/upload_pdf',
         formData,
         {
           timeout: 300000,
