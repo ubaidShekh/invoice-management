@@ -1,0 +1,79 @@
+{
+  "apiRoutes": [],
+  "htmlRoutes": [
+    {
+      "file": "./index.tsx",
+      "page": "/index",
+      "namedRegex": "^/(?:/)?$",
+      "routeKeys": {},
+      "assets": {
+        "css": [],
+        "js": [
+          "/_expo/static/js/web/_layout-41c5f063694e17cf2fd4397d61222708.js",
+          "/_expo/static/js/web/index-4b0cd9e093d96710fb5ad89c7ea037b2.js"
+        ]
+      }
+    },
+    {
+      "file": "./explore.tsx",
+      "page": "/explore",
+      "namedRegex": "^/explore(?:/)?$",
+      "routeKeys": {},
+      "assets": {
+        "css": [],
+        "js": [
+          "/_expo/static/js/web/_layout-41c5f063694e17cf2fd4397d61222708.js",
+          "/_expo/static/js/web/explore-a448ede5f116c113a000c5e3054bfab7.js"
+        ]
+      }
+    },
+    {
+      "file": "expo-router/build/views/Sitemap.js",
+      "page": "/_sitemap",
+      "namedRegex": "^/_sitemap(?:/)?$",
+      "routeKeys": {},
+      "generated": true,
+      "assets": {
+        "css": [],
+        "js": [
+          "/_expo/static/js/web/_layout-41c5f063694e17cf2fd4397d61222708.js"
+        ]
+      }
+    }
+  ],
+  "notFoundRoutes": [
+    {
+      "file": "expo-router/build/views/Unmatched.js",
+      "page": "/+not-found",
+      "namedRegex": "^(?:/(?<notfound>.+?))?(?:/)?$",
+      "routeKeys": {
+        "notfound": "not-found"
+      },
+      "generated": true
+    }
+  ],
+  "redirects": [],
+  "rewrites": [],
+  "assets": {
+    "css": [
+      {
+        "type": "css",
+        "href": "/_expo/static/css/animated-icon.module-eec65aa47fc61787231f45ae14d688f6.css"
+      },
+      {
+        "type": "css",
+        "href": "/_expo/static/css/global-87fd0564cfa78f37afcb8d7603e15d75.css"
+      }
+    ],
+    "js": [
+      "/_expo/static/js/web/__expo-metro-runtime-9f1a7b6acd20011e290bc79f0164ae37.js",
+      "/_expo/static/js/web/__common-378871d0c3da4b1aa2e9ad86e35dff79.js",
+      "/_expo/static/js/web/entry-31e2ed320d5b238ced26f2a2b4e61588.js"
+    ],
+    "favicon": "/favicon.ico"
+  },
+  "rendering": {
+    "mode": "ssr",
+    "file": "_expo/server/render.js"
+  }
+}
