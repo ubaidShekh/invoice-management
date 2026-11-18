@@ -1,5 +1,4 @@
 import DeliveryDataPage from '@/pages/DeliveryDataPage';
-import InvoiceDetailsPage from '@/pages/InvoiceDetailsPage';
 import PdfViewerPage from '@/pages/PdfViewerPage';
 import ReportsPage from '@/pages/reports';
 import React from 'react';
@@ -7,9 +6,9 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 
 const tabs = [
   { id: 0, label: 'Upload Invoice Print', icon: '📋' },
-  { id: 1, label: 'Invoice Details', icon: '📄' },
-  { id: 2, label: 'Delivery Data', icon: '📦' },
-  { id: 3, label: 'Reports', icon: '📊' },
+
+  { id: 1, label: 'Delivery Data', icon: '📦' },
+  { id: 2, label: 'Reports', icon: '📊' },
 ];
 
 export default function AppTabs() {
@@ -57,7 +56,7 @@ export default function AppTabs() {
                     transition: 'all 0.2s ease',
                   } as any}
                 >
-                  <Text style={{ fontSize: 11 }}>{tab.icon}</Text>
+
                   <Text style={{
                     fontSize: 11,
                     fontWeight: isActive ? '600' : '500',
@@ -75,9 +74,9 @@ export default function AppTabs() {
       {/* Content Area */}
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
         {activeTab === 0 && <PdfViewerPage />}
-        {activeTab === 1 && <InvoiceDetailsPage />}
-        {activeTab === 2 && <DeliveryDataPage />}
-        {activeTab === 3 && <ReportsPage />}
+
+        {activeTab === 1 && <DeliveryDataPage />}
+        {activeTab === 2 && <ReportsPage />}
       </ScrollView>
     </View>
   );

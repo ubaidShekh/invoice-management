@@ -8,7 +8,6 @@ type Product = { model: string; size: string; product_code?: string; };
 type InvoiceItem = { _id: string; invoice_number: string; products: Product[]; selected_product: Product; name: string; };
 type PdfItem = { filename: string; file_size: number; total_invoices: number; total_delivery_items?: number; uploaded_at: string; };
 type PrintAllInvoice = { filename: string; invoice_number: string; products: Product[]; selected_product: Product; };
-type DeliveryItem = { _id: string; invoice: string; model: string; size: string; barcode: string; status: 'Pending' | 'Delivered'; filename: string; date: string; };
 
 export default function PdfViewerPage() {
   const [pdfs, setPdfs] = useState<PdfItem[]>([]);
@@ -24,14 +23,6 @@ export default function PdfViewerPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
-
-  // Delivery Items (PDF Viewer specific)
-  const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
-  const [deliveryLoading, setDeliveryLoading] = useState(false);
-  const [deliveryBarcode, setDeliveryBarcode] = useState('');
-  const [delivering, setDelivering] = useState(false);
-  const [deliveryMessage, setDeliveryMessage] = useState('');
-  const deliveryInputRef = useRef<HTMLInputElement>(null);
 
   // Delete
   const [selectedFilenames, setSelectedFilenames] = useState<string[]>([]);
@@ -61,49 +52,6 @@ export default function PdfViewerPage() {
     }
   };
 
-  const fetchDeliveryItems = async () => {
-    try {
-      setDeliveryLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-viewer-delivery-items`);
-      setDeliveryItems(response.data);
-    } catch (err: any) {
-      console.error('Failed to fetch PDF viewer delivery items', err);
-    } finally {
-      setDeliveryLoading(false);
-    }
-  };
-
-  const handleDeliverItem = async (barcodeValue: string) => {
-    const code = barcodeValue.trim();
-    if (!code) {
-      setDeliveryMessage('Please enter or scan a barcode.');
-      if (deliveryInputRef.current) deliveryInputRef.current.focus();
-      return;
-    }
-    if (delivering) return;
-
-    try {
-      setDelivering(true);
-      setDeliveryMessage('');
-      const response = await axios.post(`${API_BASE_URL}/api/pdf-viewer-delivery-items/scan`, { barcode: code });
-      setDeliveryMessage(`✅ ${response.data.message}`);
-      setDeliveryBarcode('');
-      await fetchDeliveryItems();
-    } catch (err: any) {
-      setDeliveryMessage(`❌ ${err.response?.data?.detail || 'Failed to deliver item'}`);
-    } finally {
-      setDelivering(false);
-      setTimeout(() => { if (deliveryInputRef.current) deliveryInputRef.current.focus(); }, 100);
-    }
-  };
-
-  const handleDeliveryKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleDeliverItem(deliveryBarcode);
-    }
-  };
-
   const handleFileChange = async (e: any) => {
     const selectedFiles = Array.from(e.target.files || []) as File[];
     if (selectedFiles.length === 0) return;
@@ -120,7 +68,6 @@ export default function PdfViewerPage() {
       setMessage(`✅ ${response.data.total_files_processed} file(s) uploaded successfully.`);
       if (fileInputRef.current) fileInputRef.current.value = '';
       await fetchPdfs();
-      await fetchDeliveryItems();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Upload failed.');
     } finally {
@@ -192,14 +139,11 @@ export default function PdfViewerPage() {
 
       const blob = new Blob([response.data], { type: 'application/pdf' });
       const blobUrl = URL.createObjectURL(blob);
-
       setMessage('✅ PDF generated. Opening print dialog...');
 
       const newWindow = window.open(blobUrl, '_blank');
       if (newWindow) {
-        setTimeout(() => {
-          try { newWindow.focus(); newWindow.print(); } catch (e) { }
-        }, 2000);
+        setTimeout(() => { try { newWindow.focus(); newWindow.print(); } catch (e) { } }, 2000);
       } else {
         const iframe = document.createElement('iframe');
         iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -207,23 +151,16 @@ export default function PdfViewerPage() {
         document.body.appendChild(iframe);
         iframe.onload = () => {
           setTimeout(() => {
-            try {
-              iframe.contentWindow?.focus();
-              iframe.contentWindow?.print();
-            } catch (e) {
+            try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); }
+            catch (e) {
               const link = document.createElement('a');
-              link.href = blobUrl;
-              link.download = 'all-invoices-with-footer.pdf';
-              link.click();
+              link.href = blobUrl; link.download = 'all-invoices-with-footer.pdf'; link.click();
               setMessage('✅ PDF downloaded. Please open and print manually.');
             }
           }, 1000);
         };
-        setTimeout(() => {
-          if (document.body.contains(iframe)) document.body.removeChild(iframe);
-        }, 60000);
+        setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 60000);
       }
-
       setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
       setTimeout(() => setShowPrintAllView(false), 3000);
     } catch (err: any) {
@@ -251,16 +188,7 @@ export default function PdfViewerPage() {
     }
   };
 
-  useEffect(() => {
-    fetchPdfs();
-    fetchDeliveryItems();
-  }, []);
-
-  useEffect(() => {
-    if (deliveryInputRef.current && !delivering) {
-      setTimeout(() => { deliveryInputRef.current?.focus(); }, 300);
-    }
-  }, [deliveryItems]);
+  useEffect(() => { fetchPdfs(); }, []);
 
   const handleProductChange = (invoiceId: string, product: Product) => {
     setInvoices(prev => prev.map(inv => inv._id === invoiceId ? { ...inv, selected_product: product } : inv));
@@ -309,9 +237,7 @@ export default function PdfViewerPage() {
   };
 
   const toggleSelectFile = (filename: string) => {
-    setSelectedFilenames(prev =>
-      prev.includes(filename) ? prev.filter(f => f !== filename) : [...prev, filename]
-    );
+    setSelectedFilenames(prev => prev.includes(filename) ? prev.filter(f => f !== filename) : [...prev, filename]);
   };
 
   const toggleSelectAll = () => {
@@ -328,7 +254,6 @@ export default function PdfViewerPage() {
       setShowDeleteModal(false);
       setSelectedFilenames([]);
       await fetchPdfs();
-      await fetchDeliveryItems();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Delete failed.');
       setShowDeleteModal(false);
@@ -340,16 +265,6 @@ export default function PdfViewerPage() {
   const formatDate = (date?: string) => !date ? '-' : new Date(date).toLocaleString();
   const formatSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
   const allSelected = pdfs.length > 0 && selectedFilenames.length === pdfs.length;
-
-  const pendingDeliveryCount = deliveryItems.filter(i => i.status === 'Pending').length;
-  const deliveredCount = deliveryItems.filter(i => i.status === 'Delivered').length;
-
-  const deliveryCell = (width: number, bold = false) => ({
-    width, paddingVertical: 10, paddingHorizontal: 8, fontSize: 11,
-    fontWeight: bold ? '600' as const : '400' as const,
-    color: bold ? '#475569' : '#334155',
-    justifyContent: 'center' as const,
-  });
 
   return (
     <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
@@ -364,8 +279,8 @@ export default function PdfViewerPage() {
         <View style={{ marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
           <View>
             <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Document Workspace</Text>
-            <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>PDF Viewer & Delivery</Text>
-            <Text style={{ fontSize: 12, color: '#475569' }}>Manage PDFs and their delivery items separately.</Text>
+            <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>PDF Viewer</Text>
+            <Text style={{ fontSize: 12, color: '#475569' }}>Upload and manage your PDF documents.</Text>
           </View>
 
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
@@ -423,217 +338,84 @@ export default function PdfViewerPage() {
           </View>
         )}
 
-        {/* Scanner Card */}
-        <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 2, borderColor: '#2563EB', padding: 14, marginBottom: 16, boxShadow: '0 4px 6px rgba(37, 99, 235, 0.08)' } as any}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-            <View style={{ width: 30, height: 30, backgroundColor: '#EFF6FF', borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-              <Text style={{ fontSize: 15 }}>▥</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>PDF Viewer Barcode Scanner</Text>
-              <Text style={{ fontSize: 11, color: '#2563EB' }}>🟢 Ready — Only for PDF Viewer items</Text>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 6 }}>
-              <View style={{ backgroundColor: '#FFF7ED', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 }}>
-                <Text style={{ fontSize: 10, fontWeight: '600', color: '#EA580C' }}>{pendingDeliveryCount} Pending</Text>
-              </View>
-              <View style={{ backgroundColor: '#F0FDF4', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 }}>
-                <Text style={{ fontSize: 10, fontWeight: '600', color: '#15803D' }}>{deliveredCount} Delivered</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            {React.createElement('input', {
-              ref: deliveryInputRef,
-              value: deliveryBarcode,
-              placeholder: 'Scan barcode or type manually...',
-              disabled: delivering,
-              onChange: (e: any) => setDeliveryBarcode(e.target.value),
-              onKeyDown: handleDeliveryKeyDown,
-              autoFocus: true,
-              style: {
-                flex: 1, minWidth: 200,
-                padding: '9px 12px',
-                border: '2px solid #2563EB',
-                borderRadius: 4,
-                fontSize: 13, fontWeight: '600', outline: 'none',
-                backgroundColor: delivering ? '#F1F5F9' : '#EFF6FF',
-                color: '#0F172A',
-              },
-            })}
-            {React.createElement('button', {
-              onClick: () => handleDeliverItem(deliveryBarcode),
-              disabled: delivering || !deliveryBarcode.trim(),
-              style: {
-                backgroundColor: delivering || !deliveryBarcode.trim() ? '#94A3B8' : '#2563EB',
-                color: '#fff', border: 'none', borderRadius: 4,
-                padding: '9px 14px', cursor: delivering ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: '600',
-              },
-            }, delivering ? 'Processing...' : '✓ Deliver')}
-            {React.createElement('button', {
-              onClick: fetchDeliveryItems,
-              disabled: deliveryLoading,
-              style: {
-                backgroundColor: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0', borderRadius: 4,
-                padding: '9px 12px', cursor: 'pointer', fontSize: 12, fontWeight: '600',
-              },
-            }, '↻ Refresh')}
-          </View>
-
-          {deliveryMessage !== '' && (
-            <View style={{ marginTop: 8, padding: 8, borderRadius: 4, backgroundColor: deliveryMessage.includes('✅') ? '#F0FDF4' : '#FEF2F2', borderWidth: 1, borderColor: deliveryMessage.includes('✅') ? '#BBF7D0' : '#FECACA' }}>
-              <Text style={{ color: deliveryMessage.includes('✅') ? '#15803D' : '#DC2626', fontSize: 11, fontWeight: '500' }}>{deliveryMessage}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Main Content: PDF List + Delivery Items */}
+        {/* PDF List View */}
         {!selectedPdf && !showPrintAllView && (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-
-            {/* LEFT: PDF LIST */}
-            <View style={{ flex: 1, minWidth: 320, backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {pdfs.length > 0 && (
-                    <Pressable
-                      onPress={toggleSelectAll}
-                      style={{
-                        width: 18, height: 18, borderRadius: 3, borderWidth: 2,
-                        borderColor: allSelected ? '#2563EB' : '#CBD5E1',
-                        backgroundColor: allSelected ? '#2563EB' : '#FFFFFF',
-                        alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                      } as any}
-                    >
-                      {allSelected && <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>✓</Text>}
-                    </Pressable>
-                  )}
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
-                    PDFs ({pdfs.length})
-                    {selectedFilenames.length > 0 && (
-                      <Text style={{ fontSize: 11, fontWeight: '500', color: '#2563EB' }}> • {selectedFilenames.length} selected</Text>
-                    )}
-                  </Text>
-                </View>
-
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {selectedFilenames.length > 0 && (
-                    <Pressable
-                      onPress={() => setShowDeleteModal(true)}
-                      style={{ backgroundColor: '#DC2626', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                    >
-                      <Text style={{ fontSize: 10 }}>🗑</Text>
-                      <Text style={{ fontSize: 10, fontWeight: '600', color: '#FFFFFF' }}>Delete</Text>
-                    </Pressable>
-                  )}
-                  <Pressable onPress={fetchPdfs} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
-                    <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>↻</Text>
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                {pdfs.length > 0 && (
+                  <Pressable
+                    onPress={toggleSelectAll}
+                    style={{
+                      width: 18, height: 18, borderRadius: 3, borderWidth: 2,
+                      borderColor: allSelected ? '#2563EB' : '#CBD5E1',
+                      backgroundColor: allSelected ? '#2563EB' : '#FFFFFF',
+                      alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                    } as any}
+                  >
+                    {allSelected && <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>✓</Text>}
                   </Pressable>
-                </View>
+                )}
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
+                  PDFs ({pdfs.length})
+                  {selectedFilenames.length > 0 && (
+                    <Text style={{ fontSize: 11, fontWeight: '500', color: '#2563EB' }}> • {selectedFilenames.length} selected</Text>
+                  )}
+                </Text>
               </View>
 
-              {loading ? (
-                <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
-              ) : pdfs.length === 0 ? (
-                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 28, marginBottom: 8 }}>📁</Text>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No PDFs Yet</Text>
-                  <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload PDF to get started</Text>
-                </View>
-              ) : (
-                <ScrollView style={{ maxHeight: 500 }}>
-                  <View style={{ gap: 6 }}>
-                    {pdfs.map((pdf, i) => {
-                      const isSelected = selectedFilenames.includes(pdf.filename);
-                      return (
-                        <View key={`${pdf.filename}-${i}`} style={{ backgroundColor: isSelected ? '#EFF6FF' : '#F8FAFC', borderWidth: 1, borderColor: isSelected ? '#2563EB' : '#E2E8F0', borderRadius: 4, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <Pressable
-                            onPress={() => toggleSelectFile(pdf.filename)}
-                            style={{ width: 16, height: 16, borderRadius: 2, borderWidth: 2, borderColor: isSelected ? '#2563EB' : '#CBD5E1', backgroundColor: isSelected ? '#2563EB' : '#FFFFFF', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' } as any}
-                          >
-                            {isSelected && <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700' }}>✓</Text>}
-                          </Pressable>
-                          <Pressable onPress={() => openPdf(pdf.filename)} style={{ flex: 1, cursor: 'pointer' } as any}>
-                            <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A' }} numberOfLines={1}>{pdf.filename}</Text>
-                            <Text style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>
-                              {pdf.total_invoices} inv • {pdf.total_delivery_items || 0} items • {formatSize(pdf.file_size)}
-                            </Text>
-                          </Pressable>
-                          <Pressable onPress={() => openPdf(pdf.filename)} style={{ paddingHorizontal: 6, cursor: 'pointer' } as any}>
-                            <Text style={{ fontSize: 12, fontWeight: '600', color: '#2563EB' }}>→</Text>
-                          </Pressable>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </ScrollView>
-              )}
-            </View>
-
-            {/* RIGHT: PDF VIEWER DELIVERY ITEMS TABLE */}
-            <View style={{ flex: 1.5, minWidth: 500, backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <View>
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>PDF Viewer Delivery Items ({deliveryItems.length})</Text>
-                  <Text style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>Separate from main delivery system</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <View style={{ backgroundColor: '#FFF7ED', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 3 }}>
-                    <Text style={{ fontSize: 9, fontWeight: '600', color: '#EA580C' }}>{pendingDeliveryCount} Pending</Text>
-                  </View>
-                  <View style={{ backgroundColor: '#F0FDF4', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 3 }}>
-                    <Text style={{ fontSize: 9, fontWeight: '600', color: '#15803D' }}>{deliveredCount} Delivered</Text>
-                  </View>
-                </View>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {selectedFilenames.length > 0 && (
+                  <Pressable
+                    onPress={() => setShowDeleteModal(true)}
+                    style={{ backgroundColor: '#DC2626', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  >
+                    <Text style={{ fontSize: 10 }}>🗑</Text>
+                    <Text style={{ fontSize: 10, fontWeight: '600', color: '#FFFFFF' }}>Delete</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={fetchPdfs} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>↻</Text>
+                </Pressable>
               </View>
-
-              {deliveryLoading ? (
-                <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
-              ) : deliveryItems.length === 0 ? (
-                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 28, marginBottom: 8 }}>📦</Text>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No Items Yet</Text>
-                  <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload a PDF to generate items</Text>
-                </View>
-              ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator>
-                  <View>
-                    <View style={{ flexDirection: 'row', backgroundColor: '#F8FAFC', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#E2E8F0' }}>
-                      {[['Invoice', 110], ['Model', 80], ['Size', 60], ['Barcode', 180], ['Status', 100], ['Action', 90]].map(([label, width]) => (
-                        <View key={label} style={deliveryCell(width as number, true)}>
-                          <Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>{label}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <ScrollView style={{ maxHeight: 500 }}>
-                      {deliveryItems.map((item) => (
-                        <View key={item._id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center', backgroundColor: '#FFFFFF' }}>
-                          <View style={deliveryCell(110)}><Text style={{ fontSize: 11, fontWeight: '600', color: '#0F172A' }}>{item.invoice}</Text></View>
-                          <View style={deliveryCell(80)}><Text style={{ fontSize: 11, color: '#334155' }}>{item.model}</Text></View>
-                          <View style={deliveryCell(60)}><Text style={{ fontSize: 11, color: '#334155' }}>{item.size}</Text></View>
-                          <View style={deliveryCell(180)}><Text style={{ fontSize: 9, color: '#64748B', fontFamily: 'monospace' }}>{item.barcode}</Text></View>
-                          <View style={deliveryCell(100)}>
-                            <View style={{ backgroundColor: item.status === 'Delivered' ? '#F0FDF4' : '#FFF7ED', paddingVertical: 2, paddingHorizontal: 5, borderRadius: 3, alignSelf: 'flex-start' }}>
-                              <Text style={{ fontSize: 8, fontWeight: '600', color: item.status === 'Delivered' ? '#15803D' : '#EA580C' }}>● {item.status}</Text>
-                            </View>
-                          </View>
-                          <View style={{ width: 90, padding: 6 }}>
-                            {item.status === 'Pending' && React.createElement('button', {
-                              onClick: () => handleDeliverItem(item.barcode),
-                              disabled: delivering,
-                              style: { backgroundColor: '#2563EB', color: '#fff', border: 'none', borderRadius: 3, padding: '4px 6px', fontSize: 9, fontWeight: '600', cursor: 'pointer', opacity: delivering ? 0.6 : 1 },
-                            }, delivering ? '...' : 'Deliver')}
-                            {item.status === 'Delivered' && <Text style={{ fontSize: 9, fontWeight: '600', color: '#15803D' }}>✓ Done</Text>}
-                          </View>
-                        </View>
-                      ))}
-                    </ScrollView>
-                  </View>
-                </ScrollView>
-              )}
             </View>
+
+            {loading ? (
+              <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
+            ) : pdfs.length === 0 ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, marginBottom: 8 }}>📁</Text>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No PDFs Yet</Text>
+                <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload PDF to get started</Text>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: 500 }}>
+                <View style={{ gap: 6 }}>
+                  {pdfs.map((pdf, i) => {
+                    const isSelected = selectedFilenames.includes(pdf.filename);
+                    return (
+                      <View key={`${pdf.filename}-${i}`} style={{ backgroundColor: isSelected ? '#EFF6FF' : '#F8FAFC', borderWidth: 1, borderColor: isSelected ? '#2563EB' : '#E2E8F0', borderRadius: 4, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Pressable
+                          onPress={() => toggleSelectFile(pdf.filename)}
+                          style={{ width: 16, height: 16, borderRadius: 2, borderWidth: 2, borderColor: isSelected ? '#2563EB' : '#CBD5E1', backgroundColor: isSelected ? '#2563EB' : '#FFFFFF', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' } as any}
+                        >
+                          {isSelected && <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700' }}>✓</Text>}
+                        </Pressable>
+                        <Pressable onPress={() => openPdf(pdf.filename)} style={{ flex: 1, cursor: 'pointer' } as any}>
+                          <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A' }} numberOfLines={1}>{pdf.filename}</Text>
+                          <Text style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>
+                            {pdf.total_invoices} inv • {formatSize(pdf.file_size)}
+                          </Text>
+                        </Pressable>
+                        <Pressable onPress={() => openPdf(pdf.filename)} style={{ paddingHorizontal: 6, cursor: 'pointer' } as any}>
+                          <Text style={{ fontSize: 12, fontWeight: '600', color: '#2563EB' }}>→</Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            )}
           </View>
         )}
 
