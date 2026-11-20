@@ -2,12 +2,15 @@ import axios from 'axios';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
-const API_BASE_URL = 'https://invoice-python-api-q2oq.onrender.com';
+const API_BASE_URL = 'http://localhost:3000';
+const MAX_FILE_SIZE_MB = 100;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 type Product = { model: string; size: string; product_code?: string; };
 type InvoiceItem = { _id: string; invoice_number: string; products: Product[]; selected_product: Product; name: string; };
-type PdfItem = { filename: string; file_size: number; total_invoices: number; total_delivery_items?: number; uploaded_at: string; };
+type PdfItem = { filename: string; file_size: number; total_invoices: number; total_delivery_items?: number; uploaded_at: string; customer_id?: string; customer_name?: string; };
 type PrintAllInvoice = { filename: string; invoice_number: string; products: Product[]; selected_product: Product; };
+type Customer = { _id: string; name: string; phone?: string; notes?: string; pdf_count: number; invoice_count: number; created_at: string; };
 
 export default function PdfViewerPage() {
   const [pdfs, setPdfs] = useState<PdfItem[]>([]);
@@ -17,6 +20,7 @@ export default function PdfViewerPage() {
   const [uploading, setUploading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [savingPdf, setSavingPdf] = useState(false);
   const [generatedPdfUrl, setGeneratedPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState(false);
@@ -35,14 +39,41 @@ export default function PdfViewerPage() {
   const [loadingAllInvoices, setLoadingAllInvoices] = useState(false);
   const [editingPrintAllInvoice, setEditingPrintAllInvoice] = useState<string | null>(null);
   const [printingAll, setPrintingAll] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
+
+  // Size warning
+  const [showSizeWarning, setShowSizeWarning] = useState(false);
+  const [oversizedFiles, setOversizedFiles] = useState<string[]>([]);
+
+  // Customers
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerNotes, setNewCustomerNotes] = useState('');
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [customerError, setCustomerError] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchPdfs = async () => {
+  const fetchCustomers = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/customers`);
+      setCustomers(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to fetch customers.');
+    }
+  };
+
+  const fetchPdfs = async (customerId?: string | null) => {
     try {
       setLoading(true);
       setError('');
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-files`);
+      const url = customerId
+        ? `${API_BASE_URL}/api/pdf-files?customer_id=${customerId}`
+        : `${API_BASE_URL}/api/pdf-files`;
+      const response = await axios.get(url);
       setPdfs(response.data);
       setSelectedFilenames([]);
     } catch (err: any) {
@@ -52,22 +83,78 @@ export default function PdfViewerPage() {
     }
   };
 
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  useEffect(() => {
+    if (selectedCustomer) {
+      fetchPdfs(selectedCustomer._id);
+    } else {
+      setPdfs([]);
+      setLoading(false);
+    }
+  }, [selectedCustomer]);
+
+  const createCustomer = async () => {
+    if (!newCustomerName.trim()) {
+      setCustomerError('Customer name is required');
+      return;
+    }
+    try {
+      setCreatingCustomer(true);
+      setCustomerError('');
+      await axios.post(`${API_BASE_URL}/api/customers`, {
+        name: newCustomerName.trim(),
+        phone: newCustomerPhone.trim(),
+        notes: newCustomerNotes.trim(),
+      });
+      setShowCustomerModal(false);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setNewCustomerNotes('');
+      setMessage('✅ Customer created successfully');
+      await fetchCustomers();
+    } catch (err: any) {
+      setCustomerError(err.response?.data?.detail || 'Failed to create customer');
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
   const handleFileChange = async (e: any) => {
+    if (!selectedCustomer) {
+      setError('Pehle customer select karo.');
+      return;
+    }
     const selectedFiles = Array.from(e.target.files || []) as File[];
     if (selectedFiles.length === 0) return;
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    const tooLarge = selectedFiles.filter(f => f.size > MAX_FILE_SIZE_BYTES);
+    if (tooLarge.length > 0) {
+      setOversizedFiles(tooLarge.map(f => `${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)`));
+      setShowSizeWarning(true);
+      setError('');
+      setMessage('');
+      return;
+    }
+
     try {
       setUploading(true);
       setMessage('');
       setError('');
       const formData = new FormData();
+      formData.append('customer_id', selectedCustomer._id);
       selectedFiles.forEach((file) => formData.append('invoices', file, file.name));
       const response = await axios.post(`${API_BASE_URL}/upload_pdf_viewer`, formData, {
         timeout: 300000,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setMessage(`✅ ${response.data.total_files_processed} file(s) uploaded successfully.`);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      await fetchPdfs();
+      await fetchPdfs(selectedCustomer._id);
+      await fetchCustomers();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Upload failed.');
     } finally {
@@ -171,6 +258,43 @@ export default function PdfViewerPage() {
     }
   };
 
+  const saveAll = async () => {
+    try {
+      setSavingAll(true);
+      setError('');
+      setMessage('⏳ Generating merged PDF for saving...');
+
+      const selections = printAllInvoices.map(inv => ({
+        filename: inv.filename,
+        invoice_number: inv.invoice_number,
+        model: inv.selected_product?.model || 'N/A',
+        size: inv.selected_product?.size || 'N/A',
+      }));
+
+      const response = await axios.post(
+        `${API_BASE_URL}/api/pdf-print-all-with-selections`,
+        { selections },
+        { responseType: 'blob', timeout: 180000 }
+      );
+
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = 'all-invoices-with-footer.pdf';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
+      setMessage('✅ Merged PDF saved successfully.');
+    } catch (err: any) {
+      console.error('Save All Error:', err);
+      setError('Failed to save combined PDF. Please try again.');
+    } finally {
+      setSavingAll(false);
+    }
+  };
+
   const openPdf = async (filename: string) => {
     setDetailsLoading(true);
     setSelectedPdf(filename);
@@ -187,8 +311,6 @@ export default function PdfViewerPage() {
       setDetailsLoading(false);
     }
   };
-
-  useEffect(() => { fetchPdfs(); }, []);
 
   const handleProductChange = (invoiceId: string, product: Product) => {
     setInvoices(prev => prev.map(inv => inv._id === invoiceId ? { ...inv, selected_product: product } : inv));
@@ -223,6 +345,40 @@ export default function PdfViewerPage() {
     }
   };
 
+  const savePdf = async () => {
+    if (!selectedPdf) return;
+    try {
+      setSavingPdf(true);
+      setError('');
+      setMessage('');
+      const selections = invoices.map(inv => ({
+        invoice_number: inv.invoice_number,
+        model: inv.selected_product?.model || 'N/A',
+        size: inv.selected_product?.size || 'N/A',
+      }));
+      const response = await axios.post(
+        `${API_BASE_URL}/api/pdf-with-footer/${encodeURIComponent(selectedPdf)}`,
+        { selections },
+        { responseType: 'blob', timeout: 120000 }
+      );
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      const baseName = selectedPdf.replace(/\.pdf$/i, '');
+      link.download = `${baseName}-with-footer.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
+      setMessage('✅ PDF saved successfully.');
+    } catch (err: any) {
+      setError('Failed to save PDF. Please try again.');
+    } finally {
+      setSavingPdf(false);
+    }
+  };
+
   const handlePrint = () => {
     if (!generatedPdfUrl) return;
     const printWindow = window.open(generatedPdfUrl, '_blank');
@@ -253,7 +409,8 @@ export default function PdfViewerPage() {
       setMessage(`✅ ${response.data.message}`);
       setShowDeleteModal(false);
       setSelectedFilenames([]);
-      await fetchPdfs();
+      await fetchPdfs(selectedCustomer?._id);
+      await fetchCustomers();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Delete failed.');
       setShowDeleteModal(false);
@@ -312,9 +469,9 @@ export default function PdfViewerPage() {
 
             <Pressable
               onPress={triggerUpload}
-              disabled={uploading}
+              disabled={uploading || !selectedCustomer}
               style={{
-                backgroundColor: uploading ? '#94A3B8' : '#2563EB',
+                backgroundColor: (uploading || !selectedCustomer) ? '#94A3B8' : '#2563EB',
                 paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
                 flexDirection: 'row', alignItems: 'center', gap: 6,
               } as any}
@@ -338,6 +495,70 @@ export default function PdfViewerPage() {
           </View>
         )}
 
+        {/* CUSTOMER SELECTOR */}
+        {!selectedPdf && !showPrintAllView && (
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
+                👥 Customers ({customers.length})
+              </Text>
+              <Pressable
+                onPress={() => { setShowCustomerModal(true); setCustomerError(''); }}
+                style={{ backgroundColor: '#7C3AED', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 }}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>+ New Customer</Text>
+              </Pressable>
+            </View>
+
+            {customers.length === 0 ? (
+              <Text style={{ fontSize: 11, color: '#64748B', textAlign: 'center', paddingVertical: 12 }}>
+                No customers yet. Create one to start uploading PDFs.
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 220 }}>
+                <View style={{ gap: 6 }}>
+                  {customers.map((c) => {
+                    const isActive = selectedCustomer?._id === c._id;
+                    return (
+                      <Pressable
+                        key={c._id}
+                        onPress={() => setSelectedCustomer(c)}
+                        style={{
+                          backgroundColor: isActive ? '#EDE9FE' : '#F8FAFC',
+                          borderWidth: 1,
+                          borderColor: isActive ? '#7C3AED' : '#E2E8F0',
+                          borderRadius: 4, padding: 10,
+                          flexDirection: 'row', alignItems: 'center', gap: 8,
+                        }}
+                      >
+                        <View style={{
+                          width: 28, height: 28, borderRadius: 14,
+                          backgroundColor: isActive ? '#7C3AED' : '#E2E8F0',
+                          alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: isActive ? '#FFF' : '#64748B' }}>
+                            {c.name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A' }}>{c.name}</Text>
+                          <Text style={{ fontSize: 10, color: '#64748B' }}>
+                            {c.pdf_count} PDFs • {c.invoice_count} invoices
+                            {c.phone ? ` • ${c.phone}` : ''}
+                          </Text>
+                        </View>
+                        {isActive && (
+                          <Text style={{ fontSize: 11, color: '#7C3AED', fontWeight: '600' }}>✓ Selected</Text>
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        )}
+
         {/* PDF List View */}
         {!selectedPdf && !showPrintAllView && (
           <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
@@ -358,6 +579,9 @@ export default function PdfViewerPage() {
                 )}
                 <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
                   PDFs ({pdfs.length})
+                  {selectedCustomer && (
+                    <Text style={{ fontSize: 11, fontWeight: '500', color: '#7C3AED' }}> • {selectedCustomer.name}</Text>
+                  )}
                   {selectedFilenames.length > 0 && (
                     <Text style={{ fontSize: 11, fontWeight: '500', color: '#2563EB' }}> • {selectedFilenames.length} selected</Text>
                   )}
@@ -374,13 +598,19 @@ export default function PdfViewerPage() {
                     <Text style={{ fontSize: 10, fontWeight: '600', color: '#FFFFFF' }}>Delete</Text>
                   </Pressable>
                 )}
-                <Pressable onPress={fetchPdfs} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
+                <Pressable onPress={() => fetchPdfs(selectedCustomer?._id)} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
                   <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>↻</Text>
                 </Pressable>
               </View>
             </View>
 
-            {loading ? (
+            {!selectedCustomer ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, marginBottom: 8 }}>👤</Text>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>Select a Customer</Text>
+                <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Choose a customer above to view their PDFs</Text>
+              </View>
+            ) : loading ? (
               <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
             ) : pdfs.length === 0 ? (
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
@@ -495,22 +725,43 @@ export default function PdfViewerPage() {
 
             <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 12, alignItems: 'flex-end', flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <Text style={{ fontSize: 10, color: '#64748B' }}>{printAllInvoices.length} invoices will be merged</Text>
-              <Pressable
-                onPress={generateAndPrintAll}
-                disabled={printingAll || printAllInvoices.length === 0}
-                style={{
-                  backgroundColor: printingAll || printAllInvoices.length === 0 ? '#94A3B8' : '#059669',
-                  paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
-                  flexDirection: 'row', alignItems: 'center', gap: 6,
-                  cursor: printingAll ? 'not-allowed' : 'pointer',
-                } as any}
-              >
-                {printingAll ? (
-                  <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generating...</Text></>
-                ) : (
-                  <><Text style={{ fontSize: 13 }}>⚡</Text><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generate & Print All</Text></>
-                )}
-              </Pressable>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <Pressable
+                  onPress={saveAll}
+                  disabled={savingAll || printingAll || printAllInvoices.length === 0}
+                  style={{
+                    backgroundColor: savingAll || printingAll || printAllInvoices.length === 0 ? '#94A3B8' : '#FFFFFF',
+                    borderWidth: savingAll || printingAll || printAllInvoices.length === 0 ? 0 : 1,
+                    borderColor: '#059669',
+                    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
+                    flexDirection: 'row', alignItems: 'center', gap: 6,
+                    cursor: savingAll ? 'not-allowed' : 'pointer',
+                  } as any}
+                >
+                  {savingAll ? (
+                    <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Saving...</Text></>
+                  ) : (
+                    <><Text style={{ fontSize: 13 }}>💾</Text><Text style={{ color: '#059669', fontSize: 11, fontWeight: '600' }}>Save</Text></>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  onPress={generateAndPrintAll}
+                  disabled={printingAll || savingAll || printAllInvoices.length === 0}
+                  style={{
+                    backgroundColor: printingAll || savingAll || printAllInvoices.length === 0 ? '#94A3B8' : '#059669',
+                    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
+                    flexDirection: 'row', alignItems: 'center', gap: 6,
+                    cursor: printingAll ? 'not-allowed' : 'pointer',
+                  } as any}
+                >
+                  {printingAll ? (
+                    <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generating...</Text></>
+                  ) : (
+                    <><Text style={{ fontSize: 13 }}>⚡</Text><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generate & Print All</Text></>
+                  )}
+                </Pressable>
+              </View>
             </View>
           </View>
         )}
@@ -582,17 +833,38 @@ export default function PdfViewerPage() {
 
             <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 12, alignItems: 'flex-end', flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <Text style={{ fontSize: 10, color: '#64748B' }}>{invoices.length} invoices will be added</Text>
-              <Pressable
-                onPress={generatePdf}
-                disabled={generating}
-                style={{ backgroundColor: generating ? '#94A3B8' : '#059669', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 6 } as any}
-              >
-                {generating ? (
-                  <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generating...</Text></>
-                ) : (
-                  <><Text style={{ fontSize: 13 }}>⚡</Text><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generate PDF</Text></>
-                )}
-              </Pressable>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <Pressable
+                  onPress={savePdf}
+                  disabled={savingPdf || generating}
+                  style={{
+                    backgroundColor: savingPdf || generating ? '#94A3B8' : '#FFFFFF',
+                    borderWidth: savingPdf || generating ? 0 : 1,
+                    borderColor: '#059669',
+                    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
+                    flexDirection: 'row', alignItems: 'center', gap: 6,
+                    cursor: savingPdf ? 'not-allowed' : 'pointer',
+                  } as any}
+                >
+                  {savingPdf ? (
+                    <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Saving...</Text></>
+                  ) : (
+                    <><Text style={{ fontSize: 13 }}>💾</Text><Text style={{ color: '#059669', fontSize: 11, fontWeight: '600' }}>Save</Text></>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  onPress={generatePdf}
+                  disabled={generating || savingPdf}
+                  style={{ backgroundColor: generating || savingPdf ? '#94A3B8' : '#059669', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 6 } as any}
+                >
+                  {generating ? (
+                    <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generating...</Text></>
+                  ) : (
+                    <><Text style={{ fontSize: 13 }}>⚡</Text><Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>Generate PDF</Text></>
+                  )}
+                </Pressable>
+              </View>
             </View>
           </View>
         )}
@@ -682,6 +954,122 @@ export default function PdfViewerPage() {
                   <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Deleting...</Text></>
                 ) : (
                   <><Text style={{ fontSize: 11 }}>🗑</Text><Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Delete</Text></>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SIZE WARNING MODAL */}
+      <Modal visible={showSizeWarning} transparent animationType="fade" onRequestClose={() => setShowSizeWarning(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 460, overflow: 'hidden' }}>
+            <View style={{ backgroundColor: '#FEF3C7', padding: 14, borderBottomWidth: 1, borderColor: '#FDE68A', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF3C7', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 18 }}>⚠️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>File Too Large</Text>
+                <Text style={{ fontSize: 11, color: '#92400E' }}>
+                  Max allowed size is {MAX_FILE_SIZE_MB} MB per file
+                </Text>
+              </View>
+            </View>
+            <View style={{ padding: 16 }}>
+              <Text style={{ fontSize: 12, color: '#334155', marginBottom: 10 }}>
+                The following file(s) exceed {MAX_FILE_SIZE_MB} MB and were NOT uploaded.
+                Please reduce their size and try again.
+              </Text>
+              <View style={{ backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A', borderRadius: 4, padding: 8, maxHeight: 180, overflow: 'auto' } as any}>
+                {oversizedFiles.map((f, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3 }}>
+                    <Text style={{ fontSize: 9 }}>📄</Text>
+                    <Text style={{ fontSize: 10, color: '#78350F', flex: 1 }} numberOfLines={2}>{f}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+            <View style={{ padding: 12, borderTopWidth: 1, borderColor: '#E2E8F0', flexDirection: 'row', justifyContent: 'flex-end', gap: 6, backgroundColor: '#F8FAFC' }}>
+              <Pressable
+                onPress={() => { setShowSizeWarning(false); setOversizedFiles([]); }}
+                style={{ backgroundColor: '#2563EB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4 }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>OK, I'll Reduce Size</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* NEW CUSTOMER MODAL */}
+      <Modal visible={showCustomerModal} transparent animationType="fade" onRequestClose={() => setShowCustomerModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 420 }}>
+            <View style={{ backgroundColor: '#EDE9FE', padding: 14, borderBottomWidth: 1, borderColor: '#DDD6FE' }}>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>Create New Customer</Text>
+              <Text style={{ fontSize: 11, color: '#6D28D9' }}>Add a customer to organize PDFs</Text>
+            </View>
+            <View style={{ padding: 16, gap: 10 }}>
+              {customerError ? (
+                <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', padding: 8, borderRadius: 4 }}>
+                  <Text style={{ color: '#B91C1C', fontSize: 11 }}>❌ {customerError}</Text>
+                </View>
+              ) : null}
+              <View>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Name *</Text>
+                <input
+                  value={newCustomerName}
+                  onChange={(e: any) => setNewCustomerName(e.target.value)}
+                  placeholder="e.g. Ahmed Ali"
+                  style={{
+                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
+                    borderRadius: 4, fontSize: 12, outline: 'none',
+                  } as any}
+                />
+              </View>
+              <View>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Phone</Text>
+                <input
+                  value={newCustomerPhone}
+                  onChange={(e: any) => setNewCustomerPhone(e.target.value)}
+                  placeholder="Optional"
+                  style={{
+                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
+                    borderRadius: 4, fontSize: 12, outline: 'none',
+                  } as any}
+                />
+              </View>
+              <View>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Notes</Text>
+                <input
+                  value={newCustomerNotes}
+                  onChange={(e: any) => setNewCustomerNotes(e.target.value)}
+                  placeholder="Optional"
+                  style={{
+                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
+                    borderRadius: 4, fontSize: 12, outline: 'none',
+                  } as any}
+                />
+              </View>
+            </View>
+            <View style={{ padding: 12, borderTopWidth: 1, borderColor: '#E2E8F0', flexDirection: 'row', justifyContent: 'flex-end', gap: 6, backgroundColor: '#F8FAFC' }}>
+              <Pressable
+                onPress={() => { setShowCustomerModal(false); setCustomerError(''); }}
+                disabled={creatingCustomer}
+                style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4 }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569' }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={createCustomer}
+                disabled={creatingCustomer}
+                style={{ backgroundColor: creatingCustomer ? '#A78BFA' : '#7C3AED', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+              >
+                {creatingCustomer ? (
+                  <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Creating...</Text></>
+                ) : (
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Create</Text>
                 )}
               </Pressable>
             </View>
