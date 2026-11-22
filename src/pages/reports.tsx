@@ -36,6 +36,7 @@ const UI_COLUMNS = [
   { key: 'index', label: '#', flex: 0.5, align: 'center' },
   { key: 'date', label: 'DATE', flex: 1.5, align: 'center' },
   { key: 'invoice', label: 'INVOICE', flex: 1.5, align: 'center' },
+  { key: 'customer', label: 'CUSTOMER', flex: 1.5, align: 'left' },
   { key: 'quantity', label: 'QTY', flex: 0.8, align: 'right' },
   { key: 'amount', label: 'AMOUNT', flex: 1.5, align: 'right' },
   { key: 'action', label: 'ACTION', flex: 1, align: 'center' },
@@ -52,6 +53,8 @@ type ReportItem = {
   barcode: string;
   status: string;
   deliveredAt: string;
+  customer_name: string;
+  customer_id?: string;
   normal_rate: string;
   shak: string;
   tatriz: string;
@@ -65,6 +68,7 @@ type ExportRow = {
   model: string;
   size: string;
   barcode: string;
+  customer_name: string;
   quantity: number;
   rate: number;
   shak: number;
@@ -73,6 +77,8 @@ type ExportRow = {
 };
 
 type FilterType = 'all' | 'weekly' | 'monthly' | 'exact';
+
+type Customer = { _id: string; name: string; phone: string; };
 
 const escapeHtml = (value: unknown): string =>
   String(value ?? '')
@@ -91,18 +97,37 @@ export default function ReportPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
+  // Customer selection layer
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
   // Filter states
   const [filterType, setFilterType] = useState<FilterType>('all');
-  const [exactDate, setExactDate] = useState<string>(''); // YYYY-MM-DD
+  const [exactDate, setExactDate] = useState<string>('');
 
   // Modal state
   const [selectedItem, setSelectedItem] = useState<ReportItem | null>(null);
 
-  const fetchReports = async () => {
+  const fetchCustomers = async () => {
+    try {
+      setCustomersLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/api/customers`);
+      setCustomers(response.data);
+    } catch (err: any) {
+      console.log('Customers fetch error:', err.message);
+    } finally {
+      setCustomersLoading(false);
+    }
+  };
+
+  const fetchReports = async (customerId?: string) => {
+    const cid = customerId || selectedCustomer?._id;
+    if (!cid) return;
     try {
       setLoading(true);
       setError('');
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-viewer-reports?status=delivered`);
+      const response = await axios.get(`${API_BASE_URL}/api/pdf-viewer-reports?status=delivered&customer_id=${cid}`);
       setItems(Array.isArray(response.data?.items) ? response.data.items : []);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch reports.');
@@ -112,8 +137,19 @@ export default function ReportPage() {
   };
 
   useEffect(() => {
-    fetchReports();
+    fetchCustomers();
   }, []);
+
+  const selectCustomer = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    setItems([]);
+    setError('');
+    setMessage('');
+    setEditValues({});
+    setFilterType('all');
+    setExactDate('');
+    await fetchReports(customer._id);
+  };
 
   const handleInputChange = (id: string, field: string, value: string) => {
     setEditValues(previous => ({
@@ -141,7 +177,7 @@ export default function ReportPage() {
       ));
       setMessage('Report saved successfully');
       setTimeout(() => setMessage(''), 2000);
-      setSelectedItem(null); // Close modal after save
+      setSelectedItem(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to save report.');
     } finally {
@@ -227,6 +263,7 @@ export default function ReportPage() {
     model: item.model || '-',
     size: item.size || '',
     barcode: item.barcode || '',
+    customer_name: item.customer_name || 'Unknown',
     quantity: 1,
     rate: toNum(resolvedValue(item, 'normal_rate')),
     shak: toNum(resolvedValue(item, 'shak')),
@@ -323,7 +360,7 @@ export default function ReportPage() {
       <section class="title-block">
         <h1 class="doc-title">DELIVERY SHEET</h1>
         <p class="meta"><strong>DATE:</strong> ${escapeHtml(sheetDate)}</p>
-        <p class="meta"><strong>CLIENT:</strong> THEKRA LINE</p>
+        <p class="meta"><strong>CLIENT:</strong> ${escapeHtml(selectedCustomer?.name || 'THEKRA LINE')}</p>
       </section>
     </header>
     <table>
@@ -382,7 +419,7 @@ export default function ReportPage() {
         printWindow.document.title = fileName.replace(/\.pdf$/i, '');
 
         window.setTimeout(openPrintDialog, 900);
-        setMessage('Print dialog will open. In Destination, select “Save as PDF”, then click Save.');
+        setMessage('Print dialog will open. In Destination, select "Save as PDF", then click Save.');
       } else {
         const { uri } = await Print.printToFileAsync({ html, width: 842, height: 595 });
         if (await Sharing.isAvailableAsync()) {
@@ -433,9 +470,65 @@ export default function ReportPage() {
 
   let runningIndex = 0;
 
+  // ================= CUSTOMER LIST VIEW =================
+  if (!selectedCustomer) {
+    return (
+      <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, backgroundColor: '#F3F4F6' }}>
+        <View style={{ width: '100%', maxWidth: 900, alignSelf: 'center' }}>
+          <View style={{ marginBottom: 20 }}>
+            <Text style={{ fontSize: 11, fontWeight: '600', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Reports / Delivery Reports
+            </Text>
+            <Text style={{ fontSize: 22, fontWeight: '700', color: '#111', marginBottom: 4 }}>Select Customer</Text>
+            <Text style={{ fontSize: 12, color: '#4B5563' }}>Choose a customer to view their delivery report.</Text>
+          </View>
+
+          {customersLoading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}><ActivityIndicator size="large" color={GREEN} /></View>
+          ) : customers.length === 0 ? (
+            <View style={{ backgroundColor: WHITE, padding: 40, alignItems: 'center', borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB' }}>
+              <Text style={{ fontSize: 32, marginBottom: 12 }}>👥</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#111', marginBottom: 4 }}>No Customers Yet</Text>
+              <Text style={{ fontSize: 12, color: '#6B7280' }}>Add customers from the PDF Viewer page.</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {customers.map((customer) => (
+                <Pressable key={customer._id} onPress={() => selectCustomer(customer)}
+                  style={{ backgroundColor: WHITE, borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 4, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, cursor: 'pointer' } as any}>
+                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 18 }}>👤</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }}>{customer.name}</Text>
+                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{customer.phone || 'No phone'}</Text>
+                  </View>
+                  <Text style={{ fontSize: 14, color: GREEN, fontWeight: '600' }}>View →</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // ================= EXISTING REPORT VIEW (CUSTOMER-SCOPED) =================
   return (
     <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, backgroundColor: '#F3F4F6' }}>
       <View style={{ width: '100%', maxWidth: 1100, alignSelf: 'center' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <Pressable
+            onPress={() => { setSelectedCustomer(null); setItems([]); setError(''); setMessage(''); setEditValues({}); setFilterType('all'); setExactDate(''); }}
+            style={{ backgroundColor: WHITE, borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 } as any}
+          >
+            <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Back</Text>
+          </Pressable>
+          <Text style={{ fontSize: 11, fontWeight: '600', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Customer: {selectedCustomer.name}
+          </Text>
+        </View>
+
         <View style={{ marginBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
           <View>
             <Text style={{ fontSize: 16, fontWeight: '700', color: '#111' }}>Delivery Report</Text>
@@ -452,7 +545,7 @@ export default function ReportPage() {
                 {generatingPdf ? 'Generating…' : 'Download PDF'}
               </Text>
             </Pressable>
-            <Pressable onPress={fetchReports} disabled={loading} style={{ backgroundColor: '#FFF', borderWidth: 1, borderColor: '#D1D5DB', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4 }}>
+            <Pressable onPress={() => fetchReports(selectedCustomer._id)} disabled={loading} style={{ backgroundColor: '#FFF', borderWidth: 1, borderColor: '#D1D5DB', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4 }}>
               <Text style={{ color: '#111', fontSize: 13, fontWeight: '600' }}>↻ Refresh</Text>
             </Pressable>
           </View>
@@ -502,7 +595,7 @@ export default function ReportPage() {
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={{ fontSize: 27, fontWeight: 'bold', color: '#111' }}>DELIVERY SHEET</Text>
               <Text style={{ fontSize: 11, color: '#333', fontWeight: 'bold', marginTop: 4 }}>DATE: <Text style={{ fontWeight: 'normal' }}>{filteredItems.length ? sheetDate : '-'}</Text></Text>
-              <Text style={{ fontSize: 11, color: '#333', fontWeight: 'bold' }}>CLIENT: <Text style={{ fontWeight: 'normal' }}>THEKRA LINE</Text></Text>
+              <Text style={{ fontSize: 11, color: '#333', fontWeight: 'bold' }}>CLIENT: <Text style={{ fontWeight: 'normal' }}>{selectedCustomer.name}</Text></Text>
             </View>
           </View>
 
@@ -512,7 +605,6 @@ export default function ReportPage() {
             <View style={{ paddingVertical: 40, alignItems: 'center' }}><Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }}>No Delivered Items Found for the selected filter.</Text></View>
           ) : (
             <View style={{ borderWidth: 1, borderColor: BLACK }}>
-              {/* Compact UI Table Header */}
               <View style={{ flexDirection: 'row' }}>
                 {UI_COLUMNS.map((column, index) => (
                   <View key={column.key} style={[headerCellStyle(column.flex), index === UI_COLUMNS.length - 1 ? { borderRightWidth: 0 } : null]}>
@@ -539,6 +631,7 @@ export default function ReportPage() {
                           <View style={cellStyle(0.5)}><Text style={{ fontSize: 11, textAlign: 'center' }}>{runningIndex}</Text></View>
                           <View style={cellStyle(1.5)}><Text style={{ fontSize: 11, textAlign: 'center' }}>{item.deliveredAt || '-'}</Text></View>
                           <View style={cellStyle(1.5)}><Text style={{ fontSize: 11, textAlign: 'center' }}>{item.invoice || '-'}</Text></View>
+                          <View style={cellStyle(1.5, 'left')}><Text style={{ fontSize: 11, fontWeight: '500' }}>{item.customer_name}</Text></View>
                           <View style={cellStyle(0.8, 'right')}><Text style={{ fontSize: 11, paddingRight: 4 }}>1</Text></View>
                           <View style={cellStyle(1.5, 'right')}><Text style={{ fontSize: 11, paddingRight: 4 }}>{calculatedAmount}</Text></View>
                           <View style={[cellStyle(1), { borderRightWidth: 0, alignItems: 'center' }]}>
@@ -553,9 +646,9 @@ export default function ReportPage() {
                 ))}
               </ScrollView>
 
-              {/* Total Row */}
               <View style={{ flexDirection: 'row', backgroundColor: WHITE }}>
                 <View style={cellStyle(0.5)} />
+                <View style={cellStyle(1.5)} />
                 <View style={cellStyle(1.5)} />
                 <View style={cellStyle(1.5)} />
                 <View style={cellStyle(0.8, 'right')}><Text style={{ fontSize: 11, fontWeight: 'bold', paddingRight: 4 }}>{totalQuantity}</Text></View>
@@ -588,6 +681,10 @@ export default function ReportPage() {
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ fontSize: 12, color: '#6B7280', fontWeight: '600' }}>Date</Text>
                     <Text style={{ fontSize: 13, color: '#111' }}>{selectedItem.deliveredAt}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ fontSize: 12, color: '#6B7280', fontWeight: '600' }}>Customer</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: '#111' }}>{selectedItem.customer_name}</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ fontSize: 12, color: '#6B7280', fontWeight: '600' }}>Model</Text>

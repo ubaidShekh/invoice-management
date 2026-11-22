@@ -1,239 +1,302 @@
 import axios from 'axios';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
-const API_BASE_URL = 'https://invoice-python-api-q2oq.onrender.com';
-
-type DeliveryItem = {
+type Item = {
   _id: string;
   invoice: string;
   model: string;
   size: string;
   barcode: string;
   status: 'Pending' | 'Delivered';
-  filename: string;
   date: string;
+  customer_name: string;
+  customer_id?: string;
 };
 
+type Customer = { _id: string; name: string; phone: string; };
+
+const API_URL = 'https://invoice-python-api-q2oq.onrender.com';
+
 export default function DeliveryDataPage() {
-  const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
-  const [deliveryLoading, setDeliveryLoading] = useState(false);
-  const [deliveryBarcode, setDeliveryBarcode] = useState('');
-  const [delivering, setDelivering] = useState(false);
-  const [deliveryMessage, setDeliveryMessage] = useState('');
-  const [error, setError] = useState('');
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  const [barcode, setBarcode] = useState('');
+  const [items, setItems] = useState<Item[]>([]);
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [delivering, setDelivering] = useState(false);
 
-  const deliveryInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const fetchDeliveryItems = async () => {
+  const fetchCustomers = async () => {
     try {
-      setDeliveryLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-viewer-delivery-items`);
-      setDeliveryItems(response.data);
-    } catch (err: any) {
-      console.error('Failed to fetch PDF viewer delivery items', err);
-      setError(err.response?.data?.detail || 'Failed to fetch delivery items.');
+      setCustomersLoading(true);
+      const response = await axios.get(`${API_URL}/api/customers`);
+      setCustomers(response.data);
+    } catch (error: any) {
+      console.log('Customers fetch error:', error.message);
     } finally {
-      setDeliveryLoading(false);
+      setCustomersLoading(false);
     }
   };
 
-  const handleDeliverItem = async (barcodeValue: string) => {
-    const code = barcodeValue.trim();
+  useEffect(() => { fetchCustomers(); }, []);
+
+  const fetchItems = async (customerId?: string) => {
+    const cid = customerId || selectedCustomer?._id;
+    if (!cid) return;
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_URL}/api/pdf-viewer-delivery-items?customer_id=${cid}`);
+      setItems(response.data);
+      setMessage('');
+    } catch (error: any) {
+      console.log('Fetch Error:', error.message);
+      setMessage('Failed to fetch delivery items.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selectCustomer = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    setItems([]);
+    setMessage('');
+    setBarcode('');
+    await fetchItems(customer._id);
+    setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 500);
+  };
+
+  const deliverItem = async (value: string) => {
+    const code = value.trim();
     if (!code) {
-      setDeliveryMessage('Please enter or scan a barcode.');
-      if (deliveryInputRef.current) deliveryInputRef.current.focus();
+      setMessage('Please enter or scan a barcode.');
+      if (inputRef.current) inputRef.current.focus();
       return;
     }
-    if (delivering) return;
+    if (delivering || !selectedCustomer) return;
 
     try {
       setDelivering(true);
-      setDeliveryMessage('');
-      const response = await axios.post(`${API_BASE_URL}/api/pdf-viewer-delivery-items/scan`, { barcode: code });
-      setDeliveryMessage(`✅ ${response.data.message}`);
-      setDeliveryBarcode('');
-      await fetchDeliveryItems();
-    } catch (err: any) {
-      setDeliveryMessage(`❌ ${err.response?.data?.detail || 'Failed to deliver item'}`);
+      setMessage('');
+      const response = await axios.post(`${API_URL}/api/pdf-viewer-delivery-items/scan`, {
+        barcode: code,
+        customer_id: selectedCustomer._id,
+      });
+      setMessage(`✅ ${response.data.message} (${code})`);
+      setBarcode('');
+      await fetchItems();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || 'Backend connection failed.';
+      setMessage(`❌ ${errorMessage} (${code})`);
+      setBarcode('');
     } finally {
       setDelivering(false);
-      setTimeout(() => { if (deliveryInputRef.current) deliveryInputRef.current.focus(); }, 100);
+      setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 100);
     }
   };
 
-  const handleDeliveryKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleDeliverItem(deliveryBarcode);
-    }
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); deliverItem(barcode); }
   };
 
-  useEffect(() => {
-    fetchDeliveryItems();
-  }, []);
+  const openCameraScanner = () => { alert('Camera scanner integration will be added.'); };
 
-  useEffect(() => {
-    if (deliveryInputRef.current && !delivering) {
-      setTimeout(() => { deliveryInputRef.current?.focus(); }, 300);
-    }
-  }, [deliveryItems]);
+  const buttonStyle = {
+    backgroundColor: '#2563EB', color: '#fff', border: 'none', borderRadius: 4,
+    padding: '8px 14px', cursor: 'pointer', fontSize: 12, fontWeight: '600',
+  };
 
-  const pendingDeliveryCount = deliveryItems.filter(i => i.status === 'Pending').length;
-  const deliveredCount = deliveryItems.filter(i => i.status === 'Delivered').length;
+  const pendingCount = items.filter((item) => item.status === 'Pending').length;
+  const deliveredCount = items.filter((item) => item.status === 'Delivered').length;
 
-  const deliveryCell = (width: number, bold = false) => ({
-    width, paddingVertical: 10, paddingHorizontal: 8, fontSize: 11,
-    fontWeight: bold ? '600' as const : '400' as const,
-    color: bold ? '#475569' : '#334155',
-    justifyContent: 'center' as const,
-  });
+  // ================= CUSTOMER LIST VIEW =================
+  if (!selectedCustomer) {
+    return (
+      <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
+        <View style={{ width: '100%', maxWidth: 900, alignSelf: 'center' }}>
+          <View style={{ marginBottom: 20 }}>
+            <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              Logistics / Delivery Management
+            </Text>
+            <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>Select Customer</Text>
+            <Text style={{ fontSize: 12, color: '#475569' }}>Choose a customer to manage their deliveries.</Text>
+          </View>
 
+          {customersLoading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}><ActivityIndicator size="large" color="#2563EB" /></View>
+          ) : customers.length === 0 ? (
+            <View style={{ backgroundColor: '#FFFFFF', padding: 40, alignItems: 'center', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+              <Text style={{ fontSize: 32, marginBottom: 12 }}>👥</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A', marginBottom: 4 }}>No Customers Yet</Text>
+              <Text style={{ fontSize: 12, color: '#64748B' }}>Add customers from the PDF Viewer page.</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {customers.map((customer) => (
+                <Pressable key={customer._id} onPress={() => selectCustomer(customer)}
+                  style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, cursor: 'pointer' } as any}>
+                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 18 }}>👤</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A' }}>{customer.name}</Text>
+                    <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{customer.phone || 'No phone'}</Text>
+                  </View>
+                  <Text style={{ fontSize: 14, color: '#2563EB', fontWeight: '600' }}>View →</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // ================= CUSTOMER-SCOPED PAGE =================
   return (
     <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
       <View style={{ width: '100%', maxWidth: '100%', alignSelf: 'center' }}>
 
-        {/* Header */}
-        <View style={{ marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-          <View>
-            <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Delivery Workspace</Text>
-            <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>PDF Viewer Delivery Items</Text>
-            <Text style={{ fontSize: 12, color: '#475569' }}>Scan barcodes to mark items as delivered.</Text>
+        <View style={{ marginBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <Pressable onPress={() => { setSelectedCustomer(null); setItems([]); setBarcode(''); setMessage(''); }}
+              style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 } as any}>
+              <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Back</Text>
+            </Pressable>
+            <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Customer: {selectedCustomer.name}
+            </Text>
           </View>
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <View style={{ backgroundColor: '#FFF7ED', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4 }}>
-              <Text style={{ fontSize: 11, fontWeight: '600', color: '#EA580C' }}>{pendingDeliveryCount} Pending</Text>
+          <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>Delivery Data & Scanner</Text>
+          <Text style={{ fontSize: 12, color: '#475569' }}>Manage shipment records, scan barcodes and track delivery status.</Text>
+        </View>
+
+        {/* Stats Cards */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}>
+          <View style={{ flex: 1, minWidth: 180, backgroundColor: '#FFFFFF', padding: 16, borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' } as any}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+              <View style={{ width: 28, height: 28, backgroundColor: '#EFF6FF', borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                <Text style={{ fontSize: 14 }}>📦</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '500' }}>Total Items</Text>
             </View>
-            <View style={{ backgroundColor: '#F0FDF4', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4 }}>
-              <Text style={{ fontSize: 11, fontWeight: '600', color: '#15803D' }}>{deliveredCount} Delivered</Text>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#0F172A' }}>{loading ? '...' : items.length}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: 180, backgroundColor: '#FFFFFF', padding: 16, borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' } as any}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+              <View style={{ width: 28, height: 28, backgroundColor: '#FFF7ED', borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                <Text style={{ fontSize: 14 }}>⏳</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '500' }}>Pending Deliveries</Text>
             </View>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#EA580C' }}>{loading ? '...' : pendingCount}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: 180, backgroundColor: '#FFFFFF', padding: 16, borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' } as any}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+              <View style={{ width: 28, height: 28, backgroundColor: '#F0FDF4', borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                <Text style={{ fontSize: 14 }}>✓</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '500' }}>Delivered Items</Text>
+            </View>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#15803D' }}>{loading ? '...' : deliveredCount}</Text>
           </View>
         </View>
 
-        {!!error && (
-          <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', padding: 10, borderRadius: 4, marginBottom: 12 }}>
-            <Text style={{ color: '#B91C1C', fontSize: 12 }}>❌ {error}</Text>
-          </View>
-        )}
-        {!!message && (
-          <View style={{ backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', padding: 10, borderRadius: 4, marginBottom: 12 }}>
-            <Text style={{ color: '#15803D', fontSize: 12 }}>{message}</Text>
-          </View>
-        )}
-
         {/* Scanner Card */}
-        <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 2, borderColor: '#2563EB', padding: 14, marginBottom: 16, boxShadow: '0 4px 6px rgba(37, 99, 235, 0.08)' } as any}>
+        <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 2, borderColor: '#2563EB', padding: 16, marginBottom: 16, boxShadow: '0 4px 6px rgba(37, 99, 235, 0.08)' } as any}>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
             <View style={{ width: 30, height: 30, backgroundColor: '#EFF6FF', borderRadius: 4, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
               <Text style={{ fontSize: 15 }}>▥</Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>PDF Viewer Barcode Scanner</Text>
-              <Text style={{ fontSize: 11, color: '#2563EB' }}>🟢 Ready — Only for PDF Viewer items</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>Hardware Scanner Ready</Text>
+              <Text style={{ fontSize: 11, color: '#2563EB' }}>🟢 Waiting for scan...</Text>
             </View>
           </View>
 
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
             {React.createElement('input', {
-              ref: deliveryInputRef,
-              value: deliveryBarcode,
-              placeholder: 'Scan barcode or type manually...',
-              disabled: delivering,
-              onChange: (e: any) => setDeliveryBarcode(e.target.value),
-              onKeyDown: handleDeliveryKeyDown,
-              autoFocus: true,
-              style: {
-                flex: 1, minWidth: 200,
-                padding: '9px 12px',
-                border: '2px solid #2563EB',
-                borderRadius: 4,
-                fontSize: 13, fontWeight: '600', outline: 'none',
-                backgroundColor: delivering ? '#F1F5F9' : '#EFF6FF',
-                color: '#0F172A',
-              },
+              ref: inputRef, value: barcode, placeholder: 'Scan or type barcode...', disabled: delivering,
+              onChange: (e: any) => setBarcode(e.target.value), onKeyDown: handleKeyDown, autoFocus: true,
+              style: { flex: 1, minWidth: 200, padding: '9px 12px', border: '2px solid #2563EB', borderRadius: 4, fontSize: 13, fontWeight: '600', outline: 'none', backgroundColor: delivering ? '#F1F5F9' : '#EFF6FF', color: '#0F172A' },
             })}
-            {React.createElement('button', {
-              onClick: () => handleDeliverItem(deliveryBarcode),
-              disabled: delivering || !deliveryBarcode.trim(),
-              style: {
-                backgroundColor: delivering || !deliveryBarcode.trim() ? '#94A3B8' : '#2563EB',
-                color: '#fff', border: 'none', borderRadius: 4,
-                padding: '9px 14px', cursor: delivering ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: '600',
-              },
-            }, delivering ? 'Processing...' : '✓ Deliver')}
-            {React.createElement('button', {
-              onClick: fetchDeliveryItems,
-              disabled: deliveryLoading,
-              style: {
-                backgroundColor: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0', borderRadius: 4,
-                padding: '9px 12px', cursor: 'pointer', fontSize: 12, fontWeight: '600',
-              },
-            }, '↻ Refresh')}
+            {React.createElement('button', { onClick: () => deliverItem(barcode), disabled: delivering || !barcode.trim(), style: { ...buttonStyle, padding: '9px 16px', opacity: delivering || !barcode.trim() ? 0.5 : 1 } }, delivering ? 'Processing...' : '✓ Deliver')}
+            {React.createElement('button', { onClick: () => fetchItems(), disabled: loading || delivering, style: { ...buttonStyle, backgroundColor: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0', padding: '9px 12px' } }, '↻ Refresh')}
+            {React.createElement('button', { onClick: openCameraScanner, style: { ...buttonStyle, backgroundColor: '#FFFFFF', color: '#2563EB', border: '1px solid #BFDBFE', padding: '9px 12px' } }, '📷 Camera')}
           </View>
 
-          {deliveryMessage !== '' && (
-            <View style={{ marginTop: 8, padding: 8, borderRadius: 4, backgroundColor: deliveryMessage.includes('✅') ? '#F0FDF4' : '#FEF2F2', borderWidth: 1, borderColor: deliveryMessage.includes('✅') ? '#BBF7D0' : '#FECACA' }}>
-              <Text style={{ color: deliveryMessage.includes('✅') ? '#15803D' : '#DC2626', fontSize: 11, fontWeight: '500' }}>{deliveryMessage}</Text>
+          {message !== '' && (
+            <View style={{ marginTop: 10, padding: 8, borderRadius: 4, backgroundColor: message.includes('✅') ? '#F0FDF4' : '#FEF2F2', borderWidth: 1, borderColor: message.includes('✅') ? '#BBF7D0' : '#FECACA' }}>
+              <Text style={{ color: message.includes('✅') ? '#15803D' : '#DC2626', fontSize: 11, fontWeight: '500' }}>{message}</Text>
             </View>
           )}
         </View>
 
-        {/* Delivery Items Table */}
-        <View style={{ flex: 1, width: '100%', backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        {/* Delivery Records Table */}
+        <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
             <View>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>PDF Viewer Delivery Items ({deliveryItems.length})</Text>
-              <Text style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>Separate from main delivery system</Text>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>Delivery Records</Text>
+              <Text style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>Track invoice, barcode and shipment status.</Text>
+            </View>
+            <View style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
+              <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>{loading ? 'Loading...' : `${items.length} Records`}</Text>
             </View>
           </View>
 
-          {deliveryLoading ? (
-            <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
-          ) : deliveryItems.length === 0 ? (
-            <View style={{ paddingVertical: 40, alignItems: 'center', width: '100%' }}>
-              <Text style={{ fontSize: 28, marginBottom: 8 }}>📦</Text>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No Items Yet</Text>
-              <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload a PDF in PDF Viewer to generate items</Text>
+          {loading ? (
+            <View style={{ alignItems: 'center', paddingVertical: 30 }}><ActivityIndicator size="small" color="#2563EB" /></View>
+          ) : items.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+              <Text style={{ fontSize: 24, marginBottom: 8 }}>📦</Text>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A' }}>No Delivery Items Found</Text>
             </View>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator style={{ flex: 1, width: '100%' }}>
-              <View style={{ width: '100%' }}>
-                <View style={{ flexDirection: 'row', backgroundColor: '#F8FAFC', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#E2E8F0' }}>
-                  {[['Invoice', 110], ['Model', 80], ['Size', 60], ['Barcode', 180], ['Status', 100], ['Action', 90]].map(([label, width]) => (
-                    <View key={label} style={deliveryCell(width as number, true)}>
-                      <Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>{label}</Text>
-                    </View>
-                  ))}
-                </View>
-                <ScrollView style={{ maxHeight: '100%', flex: 1, }}>
-                  {deliveryItems.map((item) => (
-                    <View key={item._id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center', backgroundColor: '#FFFFFF', width: '100%', flex: 1, }}>
-                      <View style={deliveryCell(110)}><Text style={{ fontSize: 11, fontWeight: '600', color: '#0F172A' }}>{item.invoice}</Text></View>
-                      <View style={deliveryCell(80)}><Text style={{ fontSize: 11, color: '#334155' }}>{item.model}</Text></View>
-                      <View style={deliveryCell(60)}><Text style={{ fontSize: 11, color: '#334155' }}>{item.size}</Text></View>
-                      <View style={deliveryCell(180)}><Text style={{ fontSize: 9, color: '#64748B', fontFamily: 'monospace' }}>{item.barcode}</Text></View>
-                      <View style={deliveryCell(100)}>
-                        <View style={{ backgroundColor: item.status === 'Delivered' ? '#F0FDF4' : '#FFF7ED', paddingVertical: 2, paddingHorizontal: 5, borderRadius: 3, alignSelf: 'flex-start' }}>
-                          <Text style={{ fontSize: 8, fontWeight: '600', color: item.status === 'Delivered' ? '#15803D' : '#EA580C' }}>● {item.status}</Text>
-                        </View>
-                      </View>
-                      <View style={{ width: 90, padding: 6 }}>
-                        {item.status === 'Pending' && React.createElement('button', {
-                          onClick: () => handleDeliverItem(item.barcode),
-                          disabled: delivering,
-                          style: { backgroundColor: '#2563EB', color: '#fff', border: 'none', borderRadius: 3, padding: '4px 6px', fontSize: 9, fontWeight: '600', cursor: 'pointer', opacity: delivering ? 0.6 : 1 },
-                        }, delivering ? '...' : 'Deliver')}
-                        {item.status === 'Delivered' && <Text style={{ fontSize: 9, fontWeight: '600', color: '#15803D' }}>✓ Done</Text>}
-                      </View>
-                    </View>
-                  ))}
-                </ScrollView>
+            <View style={{ width: '100%' }}>
+              <View style={{ flexDirection: 'row', backgroundColor: '#F8FAFC', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#E2E8F0' }}>
+                <View style={{ flex: 2, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Invoice</Text></View>
+                <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Customer</Text></View>
+                <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Model</Text></View>
+                <View style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Size</Text></View>
+                <View style={{ flex: 2.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Barcode</Text></View>
+                <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Status</Text></View>
+                <View style={{ flex: 2, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Date</Text></View>
+                <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, fontWeight: '600', color: '#475569', textTransform: 'uppercase' }}>Action</Text></View>
               </View>
-            </ScrollView>
+
+              <ScrollView style={{ maxHeight: 500 }}>
+                {items.map((item) => (
+                  <View key={item._id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center' }}>
+                    <View style={{ flex: 2, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 11, fontWeight: '600', color: '#0F172A' }}>{item.invoice}</Text></View>
+                    <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 11, color: '#334155' }}>{item.customer_name}</Text></View>
+                    <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 11, color: '#334155' }}>{item.model}</Text></View>
+                    <View style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 11, color: '#334155' }}>{item.size}</Text></View>
+                    <View style={{ flex: 2.5, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 9, color: '#64748B', fontFamily: 'monospace' }}>{item.barcode}</Text></View>
+                    <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}>
+                      <View style={{ backgroundColor: item.status === 'Delivered' ? '#F0FDF4' : '#FFF7ED', paddingVertical: 3, paddingHorizontal: 6, borderRadius: 3, alignSelf: 'flex-start' }}>
+                        <Text style={{ fontSize: 9, fontWeight: '600', color: item.status === 'Delivered' ? '#15803D' : '#EA580C' }}>● {item.status}</Text>
+                      </View>
+                    </View>
+                    <View style={{ flex: 2, paddingVertical: 10, paddingHorizontal: 8 }}><Text style={{ fontSize: 10, color: '#64748B' }}>{item.date === '-' ? '-' : new Date(item.date).toLocaleString()}</Text></View>
+                    <View style={{ flex: 1.5, paddingVertical: 10, paddingHorizontal: 8 }}>
+                      {item.status === 'Pending' && React.createElement('button', {
+                        onClick: () => deliverItem(item.barcode), disabled: delivering,
+                        style: { backgroundColor: '#2563EB', color: '#fff', border: 'none', borderRadius: 3, padding: '5px 8px', fontSize: 10, fontWeight: '600', cursor: 'pointer', opacity: delivering ? 0.6 : 1 },
+                      }, delivering ? '...' : 'Deliver')}
+                      {item.status === 'Delivered' && <Text style={{ fontSize: 10, fontWeight: '600', color: '#15803D' }}>✓ Done</Text>}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
           )}
         </View>
+
+        <Text style={{ fontSize: 10, color: '#94A3B8', textAlign: 'center', marginTop: 16 }}>Delivery Management System • Logistics Operations</Text>
       </View>
     </View>
   );

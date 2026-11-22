@@ -2,17 +2,30 @@ import axios from 'axios';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = 'https://invoice-python-api-q2oq.onrender.com';
 const MAX_FILE_SIZE_MB = 100;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 type Product = { model: string; size: string; product_code?: string; };
 type InvoiceItem = { _id: string; invoice_number: string; products: Product[]; selected_product: Product; name: string; };
-type PdfItem = { filename: string; file_size: number; total_invoices: number; total_delivery_items?: number; uploaded_at: string; customer_id?: string; customer_name?: string; };
+type PdfItem = { filename: string; file_size: number; total_invoices: number; total_delivery_items?: number; uploaded_at: string; batch_id?: string; batch_uploaded_at?: string; };
+type PdfBatch = { batch_id: string; customer_id: string; uploaded_at: string; pdf_count: number; total_size: number; filenames: string[]; };
 type PrintAllInvoice = { filename: string; invoice_number: string; products: Product[]; selected_product: Product; };
-type Customer = { _id: string; name: string; phone?: string; notes?: string; pdf_count: number; invoice_count: number; created_at: string; };
+type Customer = { _id: string; name: string; company: string; phone: string; email: string; };
 
 export default function PdfViewerPage() {
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerLoading, setCustomerLoading] = useState(true);
+  const [showCreateCustomer, setShowCreateCustomer] = useState(false);
+  const [newCustomer, setNewCustomer] = useState({ name: '', company: '', phone: '', email: '' });
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+
+  // Batches
+  const [pdfBatches, setPdfBatches] = useState<PdfBatch[]>([]);
+  const [selectedBatch, setSelectedBatch] = useState<PdfBatch | null>(null);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+
   const [pdfs, setPdfs] = useState<PdfItem[]>([]);
   const [selectedPdf, setSelectedPdf] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
@@ -28,12 +41,10 @@ export default function PdfViewerPage() {
   const [message, setMessage] = useState('');
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
 
-  // Delete
   const [selectedFilenames, setSelectedFilenames] = useState<string[]>([]);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Print All
   const [showPrintAllView, setShowPrintAllView] = useState(false);
   const [printAllInvoices, setPrintAllInvoices] = useState<PrintAllInvoice[]>([]);
   const [loadingAllInvoices, setLoadingAllInvoices] = useState(false);
@@ -41,38 +52,59 @@ export default function PdfViewerPage() {
   const [printingAll, setPrintingAll] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
 
-  // Size warning
   const [showSizeWarning, setShowSizeWarning] = useState(false);
   const [oversizedFiles, setOversizedFiles] = useState<string[]>([]);
-
-  // Customers
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [showCustomerModal, setShowCustomerModal] = useState(false);
-  const [newCustomerName, setNewCustomerName] = useState('');
-  const [newCustomerPhone, setNewCustomerPhone] = useState('');
-  const [newCustomerNotes, setNewCustomerNotes] = useState('');
-  const [creatingCustomer, setCreatingCustomer] = useState(false);
-  const [customerError, setCustomerError] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchCustomers = async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/customers`);
-      setCustomers(res.data);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to fetch customers.');
+      setCustomerLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/api/customers`);
+      setCustomers(response.data);
+    } catch (err) {
+      setError('Failed to fetch customers.');
+    } finally {
+      setCustomerLoading(false);
     }
   };
 
-  const fetchPdfs = async (customerId?: string | null) => {
+  useEffect(() => { fetchCustomers(); }, []);
+
+  const handleCreateCustomer = async () => {
+    if (!newCustomer.name.trim()) return;
+    try {
+      setCreatingCustomer(true);
+      await axios.post(`${API_BASE_URL}/api/customers`, newCustomer);
+      setShowCreateCustomer(false);
+      setNewCustomer({ name: '', company: '', phone: '', email: '' });
+      await fetchCustomers();
+    } catch (err) {
+      setError('Failed to create customer.');
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
+  // ----- BATCHES -----
+  const fetchPdfBatches = async (customerId: string) => {
+    try {
+      setBatchesLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/api/pdf-batches?customer_id=${customerId}`);
+      setPdfBatches(response.data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to fetch PDF batches.');
+    } finally {
+      setBatchesLoading(false);
+    }
+  };
+
+  const fetchPdfsForCustomer = async (customerId: string, batchId?: string) => {
     try {
       setLoading(true);
       setError('');
-      const url = customerId
-        ? `${API_BASE_URL}/api/pdf-files?customer_id=${customerId}`
-        : `${API_BASE_URL}/api/pdf-files`;
+      let url = `${API_BASE_URL}/api/pdf-files?customer_id=${customerId}`;
+      if (batchId) url += `&batch_id=${batchId}`;
       const response = await axios.get(url);
       setPdfs(response.data);
       setSelectedFilenames([]);
@@ -83,53 +115,21 @@ export default function PdfViewerPage() {
     }
   };
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
+  const selectCustomer = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    setSelectedBatch(null);
+    setPdfs([]);
+    await fetchPdfBatches(customer._id);
+  };
 
-  useEffect(() => {
-    if (selectedCustomer) {
-      fetchPdfs(selectedCustomer._id);
-    } else {
-      setPdfs([]);
-      setLoading(false);
-    }
-  }, [selectedCustomer]);
-
-  const createCustomer = async () => {
-    if (!newCustomerName.trim()) {
-      setCustomerError('Customer name is required');
-      return;
-    }
-    try {
-      setCreatingCustomer(true);
-      setCustomerError('');
-      await axios.post(`${API_BASE_URL}/api/customers`, {
-        name: newCustomerName.trim(),
-        phone: newCustomerPhone.trim(),
-        notes: newCustomerNotes.trim(),
-      });
-      setShowCustomerModal(false);
-      setNewCustomerName('');
-      setNewCustomerPhone('');
-      setNewCustomerNotes('');
-      setMessage('✅ Customer created successfully');
-      await fetchCustomers();
-    } catch (err: any) {
-      setCustomerError(err.response?.data?.detail || 'Failed to create customer');
-    } finally {
-      setCreatingCustomer(false);
-    }
+  const openBatch = async (batch: PdfBatch) => {
+    setSelectedBatch(batch);
+    await fetchPdfsForCustomer(batch.customer_id, batch.batch_id);
   };
 
   const handleFileChange = async (e: any) => {
-    if (!selectedCustomer) {
-      setError('Pehle customer select karo.');
-      return;
-    }
     const selectedFiles = Array.from(e.target.files || []) as File[];
     if (selectedFiles.length === 0) return;
-
     if (fileInputRef.current) fileInputRef.current.value = '';
 
     const tooLarge = selectedFiles.filter(f => f.size > MAX_FILE_SIZE_BYTES);
@@ -141,20 +141,39 @@ export default function PdfViewerPage() {
       return;
     }
 
+    if (!selectedCustomer) {
+      setError('Please select a customer first.');
+      return;
+    }
+
     try {
       setUploading(true);
       setMessage('');
       setError('');
       const formData = new FormData();
-      formData.append('customer_id', selectedCustomer._id);
       selectedFiles.forEach((file) => formData.append('invoices', file, file.name));
+      formData.append('customer_id', selectedCustomer._id);
+
       const response = await axios.post(`${API_BASE_URL}/upload_pdf_viewer`, formData, {
         timeout: 300000,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setMessage(`✅ ${response.data.total_files_processed} file(s) uploaded successfully.`);
-      await fetchPdfs(selectedCustomer._id);
-      await fetchCustomers();
+
+      const data = response.data;
+      const processed = data.total_files_processed || 0;
+      const skipped = data.skipped_files || [];
+
+      let msg = `✅ ${processed} file(s) uploaded successfully.`;
+      if (skipped.length > 0) {
+        msg += ` ⚠️ ${skipped.length} file(s) skipped: `;
+        msg += skipped.map((s: any) => `${s.filename} (${s.reason})`).join(', ');
+      }
+      setMessage(msg);
+
+      await fetchPdfBatches(selectedCustomer._id);
+      if (selectedBatch) {
+        await fetchPdfsForCustomer(selectedCustomer._id, selectedBatch.batch_id);
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Upload failed.');
     } finally {
@@ -163,6 +182,10 @@ export default function PdfViewerPage() {
   };
 
   const triggerUpload = () => {
+    if (!selectedCustomer) {
+      setError('Please select a customer first.');
+      return;
+    }
     if (fileInputRef.current) fileInputRef.current.click();
   };
 
@@ -409,8 +432,12 @@ export default function PdfViewerPage() {
       setMessage(`✅ ${response.data.message}`);
       setShowDeleteModal(false);
       setSelectedFilenames([]);
-      await fetchPdfs(selectedCustomer?._id);
-      await fetchCustomers();
+      if (selectedCustomer) {
+        if (selectedBatch) {
+          await fetchPdfsForCustomer(selectedCustomer._id, selectedBatch.batch_id);
+        }
+        await fetchPdfBatches(selectedCustomer._id);
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Delete failed.');
       setShowDeleteModal(false);
@@ -419,10 +446,242 @@ export default function PdfViewerPage() {
     }
   };
 
-  const formatDate = (date?: string) => !date ? '-' : new Date(date).toLocaleString();
+  const formatDate = (date?: string) => {
+    if (!date) return 'Date not available';
+    try {
+      return new Date(date).toLocaleString();
+    } catch {
+      return 'Invalid date';
+    }
+  };
   const formatSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
   const allSelected = pdfs.length > 0 && selectedFilenames.length === pdfs.length;
 
+  // =====================================================
+  // VIEW 1: CUSTOMER LIST
+  // =====================================================
+  if (!selectedCustomer) {
+    return (
+      <View style={{ flex: 1, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
+        <View style={{ width: '100%', maxWidth: 900, alignSelf: 'center' }}>
+          <View style={{ marginBottom: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+            <View>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Workspace</Text>
+              <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>Customers</Text>
+              <Text style={{ fontSize: 12, color: '#475569' }}>Select a customer to manage their PDFs.</Text>
+            </View>
+            <Pressable onPress={() => setShowCreateCustomer(true)} style={{ backgroundColor: '#2563EB', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 13 }}>➕</Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>New Customer</Text>
+            </Pressable>
+          </View>
+
+          {customerLoading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}><ActivityIndicator size="large" color="#2563EB" /></View>
+          ) : customers.length === 0 ? (
+            <View style={{ backgroundColor: '#FFFFFF', padding: 40, alignItems: 'center', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+              <Text style={{ fontSize: 32, marginBottom: 12 }}>👥</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A', marginBottom: 4 }}>No Customers Yet</Text>
+              <Text style={{ fontSize: 12, color: '#64748B' }}>Click "New Customer" to add your first one.</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {customers.map((customer) => (
+                <Pressable
+                  key={customer._id}
+                  onPress={() => selectCustomer(customer)}
+                  style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+                >
+                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 18 }}>👤</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A' }}>{customer.name}</Text>
+                    <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                      {customer.company && `${customer.company} • `}{customer.phone || customer.email || 'No contact info'}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 14, color: '#2563EB', fontWeight: '600' }}>View →</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <Modal visible={showCreateCustomer} transparent animationType="fade" onRequestClose={() => setShowCreateCustomer(false)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+            <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 400, padding: 24 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#0F172A', marginBottom: 16 }}>New Customer</Text>
+              <View style={{ gap: 12, marginBottom: 20 }}>
+                {React.createElement('input', {
+                  placeholder: 'Name *', value: newCustomer.name,
+                  onChange: (e: any) => setNewCustomer({ ...newCustomer, name: e.target.value }),
+                  style: { padding: '10px 12px', border: '1px solid #D1D5DB', borderRadius: 4, fontSize: 13, outline: 'none' },
+                })}
+                {React.createElement('input', {
+                  placeholder: 'Company', value: newCustomer.company,
+                  onChange: (e: any) => setNewCustomer({ ...newCustomer, company: e.target.value }),
+                  style: { padding: '10px 12px', border: '1px solid #D1D5DB', borderRadius: 4, fontSize: 13, outline: 'none' },
+                })}
+                {React.createElement('input', {
+                  placeholder: 'Phone', value: newCustomer.phone,
+                  onChange: (e: any) => setNewCustomer({ ...newCustomer, phone: e.target.value }),
+                  style: { padding: '10px 12px', border: '1px solid #D1D5DB', borderRadius: 4, fontSize: 13, outline: 'none' },
+                })}
+                {React.createElement('input', {
+                  placeholder: 'Email', value: newCustomer.email,
+                  onChange: (e: any) => setNewCustomer({ ...newCustomer, email: e.target.value }),
+                  style: { padding: '10px 12px', border: '1px solid #D1D5DB', borderRadius: 4, fontSize: 13, outline: 'none' },
+                })}
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
+                <Pressable onPress={() => setShowCreateCustomer(false)} style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB' }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#475569' }}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleCreateCustomer}
+                  disabled={creatingCustomer || !newCustomer.name.trim()}
+                  style={{ backgroundColor: creatingCustomer || !newCustomer.name.trim() ? '#94A3B8' : '#2563EB', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                >
+                  {creatingCustomer && <ActivityIndicator size="small" color="#FFF" />}
+                  <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '600' }}>Create</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    );
+  }
+
+  // =====================================================
+  // VIEW 2: BATCHES LIST
+  // =====================================================
+  if (selectedCustomer && !selectedBatch) {
+    return (
+      <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
+        {React.createElement('input', {
+          ref: fileInputRef, type: 'file', accept: 'application/pdf', multiple: true,
+          onChange: handleFileChange, style: { display: 'none' },
+        })}
+
+        <View style={{ width: '100%', maxWidth: 900, alignSelf: 'center' }}>
+          <View style={{ marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Pressable
+                onPress={() => { setSelectedCustomer(null); setPdfBatches([]); setError(''); setMessage(''); }}
+                style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 }}
+              >
+                <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Back</Text>
+              </Pressable>
+              <View>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                  Customer: {selectedCustomer.name}
+                </Text>
+                <Text style={{ fontSize: 20, fontWeight: '700', color: '#0F172A' }}>Upload Batches</Text>
+              </View>
+            </View>
+            <Pressable
+              onPress={triggerUpload}
+              disabled={uploading}
+              style={{ backgroundColor: uploading ? '#94A3B8' : '#2563EB', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 6 } as any}
+            >
+              <Text style={{ fontSize: 13 }}>📤</Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>{uploading ? 'Uploading...' : 'Upload PDF'}</Text>
+            </Pressable>
+          </View>
+
+          {!!error && (
+            <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', padding: 10, borderRadius: 4, marginBottom: 12 }}>
+              <Text style={{ color: '#B91C1C', fontSize: 12 }}>❌ {error}</Text>
+            </View>
+          )}
+          {!!message && (
+            <View style={{ backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', padding: 10, borderRadius: 4, marginBottom: 12 }}>
+              <Text style={{ color: '#15803D', fontSize: 12 }}>{message}</Text>
+            </View>
+          )}
+
+          {batchesLoading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}><ActivityIndicator size="large" color="#2563EB" /></View>
+          ) : pdfBatches.length === 0 ? (
+            <View style={{ backgroundColor: '#FFFFFF', padding: 40, alignItems: 'center', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+              <Text style={{ fontSize: 32, marginBottom: 12 }}>📁</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A', marginBottom: 4 }}>No Uploads Yet</Text>
+              <Text style={{ fontSize: 12, color: '#64748B' }}>Upload PDFs to create your first batch.</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {pdfBatches.map((batch, idx) => (
+                <Pressable
+                  key={batch.batch_id}
+                  onPress={() => openBatch(batch)}
+                  style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, cursor: 'pointer' } as any}
+                >
+                  <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#2563EB' }}>#{pdfBatches.length - idx}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#0F172A' }}>
+                      Upload Batch • {batch.pdf_count} PDF{batch.pdf_count !== 1 ? 's' : ''}
+                    </Text>
+                    <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                      {formatDate(batch.uploaded_at)} • {formatSize(batch.total_size)}
+                    </Text>
+                  </View>
+                  <View style={{ backgroundColor: '#EFF6FF', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>{batch.pdf_count}</Text>
+                  </View>
+                  <Text style={{ fontSize: 14, color: '#2563EB', fontWeight: '600' }}>View →</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <Modal visible={showSizeWarning} transparent animationType="fade" onRequestClose={() => setShowSizeWarning(false)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+            <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 460, overflow: 'hidden' }}>
+              <View style={{ backgroundColor: '#FEF3C7', padding: 14, borderBottomWidth: 1, borderColor: '#FDE68A', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF3C7', alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18 }}>⚠️</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>File Too Large</Text>
+                  <Text style={{ fontSize: 11, color: '#92400E' }}>Max allowed size is {MAX_FILE_SIZE_MB} MB per file</Text>
+                </View>
+              </View>
+              <View style={{ padding: 16 }}>
+                <Text style={{ fontSize: 12, color: '#334155', marginBottom: 10 }}>
+                  The following file(s) exceed {MAX_FILE_SIZE_MB} MB and were NOT uploaded.
+                </Text>
+                <View style={{ backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A', borderRadius: 4, padding: 8, maxHeight: 180, overflow: 'auto' } as any}>
+                  {oversizedFiles.map((f, i) => (
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3 }}>
+                      <Text style={{ fontSize: 9 }}>📄</Text>
+                      <Text style={{ fontSize: 10, color: '#78350F', flex: 1 }} numberOfLines={2}>{f}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+              <View style={{ padding: 12, borderTopWidth: 1, borderColor: '#E2E8F0', flexDirection: 'row', justifyContent: 'flex-end', gap: 6, backgroundColor: '#F8FAFC' }}>
+                <Pressable
+                  onPress={() => { setShowSizeWarning(false); setOversizedFiles([]); }}
+                  style={{ backgroundColor: '#2563EB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4 }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>OK, I'll Reduce Size</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    );
+  }
+
+  // =====================================================
+  // VIEW 3: PDFs LIST (batch selected)
+  // =====================================================
   return (
     <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, background: 'linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%)' } as any}>
       <View style={{ width: '100%', maxWidth: '100%', alignSelf: 'center' }}>
@@ -432,12 +691,26 @@ export default function PdfViewerPage() {
           onChange: handleFileChange, style: { display: 'none' },
         })}
 
-        {/* Header */}
         <View style={{ marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-          <View>
-            <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Document Workspace</Text>
-            <Text style={{ fontSize: 22, fontWeight: '700', color: '#0F172A', marginBottom: 4 }}>PDF Viewer</Text>
-            <Text style={{ fontSize: 12, color: '#475569' }}>Upload and manage your PDF documents.</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Pressable
+              onPress={() => {
+                setSelectedBatch(null);
+                setPdfs([]);
+                setSelectedFilenames([]);
+                setError('');
+                setMessage('');
+              }}
+              style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 }}
+            >
+              <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Batches</Text>
+            </Pressable>
+            <View>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                {selectedCustomer.name} • Batch ({selectedBatch?.pdf_count || pdfs.length} PDFs)
+              </Text>
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#0F172A' }}>PDF Documents</Text>
+            </View>
           </View>
 
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
@@ -446,7 +719,7 @@ export default function PdfViewerPage() {
                 onPress={() => { setSelectedPdf(null); setShowPrintAllView(false); setInvoices([]); setPrintAllInvoices([]); setError(''); handleReset(); setMessage(''); }}
                 style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 4 }}
               >
-                <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Back</Text>
+                <Text style={{ color: '#475569', fontSize: 12, fontWeight: '600' }}>← Back to PDFs</Text>
               </Pressable>
             )}
 
@@ -469,9 +742,9 @@ export default function PdfViewerPage() {
 
             <Pressable
               onPress={triggerUpload}
-              disabled={uploading || !selectedCustomer}
+              disabled={uploading}
               style={{
-                backgroundColor: (uploading || !selectedCustomer) ? '#94A3B8' : '#2563EB',
+                backgroundColor: uploading ? '#94A3B8' : '#2563EB',
                 paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4,
                 flexDirection: 'row', alignItems: 'center', gap: 6,
               } as any}
@@ -495,71 +768,6 @@ export default function PdfViewerPage() {
           </View>
         )}
 
-        {/* CUSTOMER SELECTOR */}
-        {!selectedPdf && !showPrintAllView && (
-          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, marginBottom: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
-                👥 Customers ({customers.length})
-              </Text>
-              <Pressable
-                onPress={() => { setShowCustomerModal(true); setCustomerError(''); }}
-                style={{ backgroundColor: '#7C3AED', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 }}
-              >
-                <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>+ New Customer</Text>
-              </Pressable>
-            </View>
-
-            {customers.length === 0 ? (
-              <Text style={{ fontSize: 11, color: '#64748B', textAlign: 'center', paddingVertical: 12 }}>
-                No customers yet. Create one to start uploading PDFs.
-              </Text>
-            ) : (
-              <ScrollView style={{ maxHeight: 220 }}>
-                <View style={{ gap: 6 }}>
-                  {customers.map((c) => {
-                    const isActive = selectedCustomer?._id === c._id;
-                    return (
-                      <Pressable
-                        key={c._id}
-                        onPress={() => setSelectedCustomer(c)}
-                        style={{
-                          backgroundColor: isActive ? '#EDE9FE' : '#F8FAFC',
-                          borderWidth: 1,
-                          borderColor: isActive ? '#7C3AED' : '#E2E8F0',
-                          borderRadius: 4, padding: 10,
-                          flexDirection: 'row', alignItems: 'center', gap: 8,
-                        }}
-                      >
-                        <View style={{
-                          width: 28, height: 28, borderRadius: 14,
-                          backgroundColor: isActive ? '#7C3AED' : '#E2E8F0',
-                          alignItems: 'center', justifyContent: 'center',
-                        }}>
-                          <Text style={{ fontSize: 12, fontWeight: '700', color: isActive ? '#FFF' : '#64748B' }}>
-                            {c.name.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A' }}>{c.name}</Text>
-                          <Text style={{ fontSize: 10, color: '#64748B' }}>
-                            {c.pdf_count} PDFs • {c.invoice_count} invoices
-                            {c.phone ? ` • ${c.phone}` : ''}
-                          </Text>
-                        </View>
-                        {isActive && (
-                          <Text style={{ fontSize: 11, color: '#7C3AED', fontWeight: '600' }}>✓ Selected</Text>
-                        )}
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </ScrollView>
-            )}
-          </View>
-        )}
-
-        {/* PDF List View */}
         {!selectedPdf && !showPrintAllView && (
           <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' } as any}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -579,9 +787,6 @@ export default function PdfViewerPage() {
                 )}
                 <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>
                   PDFs ({pdfs.length})
-                  {selectedCustomer && (
-                    <Text style={{ fontSize: 11, fontWeight: '500', color: '#7C3AED' }}> • {selectedCustomer.name}</Text>
-                  )}
                   {selectedFilenames.length > 0 && (
                     <Text style={{ fontSize: 11, fontWeight: '500', color: '#2563EB' }}> • {selectedFilenames.length} selected</Text>
                   )}
@@ -598,25 +803,19 @@ export default function PdfViewerPage() {
                     <Text style={{ fontSize: 10, fontWeight: '600', color: '#FFFFFF' }}>Delete</Text>
                   </Pressable>
                 )}
-                <Pressable onPress={() => fetchPdfs(selectedCustomer?._id)} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
+                <Pressable onPress={() => selectedCustomer && selectedBatch && fetchPdfsForCustomer(selectedCustomer._id, selectedBatch.batch_id)} style={{ backgroundColor: '#F1F5F9', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4 }}>
                   <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>↻</Text>
                 </Pressable>
               </View>
             </View>
 
-            {!selectedCustomer ? (
-              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                <Text style={{ fontSize: 28, marginBottom: 8 }}>👤</Text>
-                <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>Select a Customer</Text>
-                <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Choose a customer above to view their PDFs</Text>
-              </View>
-            ) : loading ? (
+            {loading ? (
               <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator size="small" color="#2563EB" /></View>
             ) : pdfs.length === 0 ? (
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                 <Text style={{ fontSize: 28, marginBottom: 8 }}>📁</Text>
-                <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No PDFs Yet</Text>
-                <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload PDF to get started</Text>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#0F172A', marginBottom: 2 }}>No PDFs in this batch</Text>
+                <Text style={{ fontSize: 10, color: '#64748B', textAlign: 'center' }}>Upload more PDFs to add them here</Text>
               </View>
             ) : (
               <ScrollView style={{ maxHeight: 500 }}>
@@ -649,7 +848,6 @@ export default function PdfViewerPage() {
           </View>
         )}
 
-        {/* PRINT ALL VIEW */}
         {showPrintAllView && (
           <View>
             <View style={{ backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FDE68A', borderRadius: 4, padding: 10, marginBottom: 12 }}>
@@ -766,7 +964,6 @@ export default function PdfViewerPage() {
           </View>
         )}
 
-        {/* SINGLE PDF SELECTION */}
         {selectedPdf && !generatedPdfUrl && (
           <View>
             <View style={{ backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#DBEAFE', borderRadius: 4, padding: 10, marginBottom: 12 }}>
@@ -869,7 +1066,6 @@ export default function PdfViewerPage() {
           </View>
         )}
 
-        {/* GENERATED PDF VIEW */}
         {selectedPdf && generatedPdfUrl && (
           <View>
             <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0', padding: 10, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -919,7 +1115,6 @@ export default function PdfViewerPage() {
         )}
       </View>
 
-      {/* DELETE MODAL */}
       <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 420, overflow: 'hidden' }}>
@@ -961,7 +1156,6 @@ export default function PdfViewerPage() {
         </View>
       </Modal>
 
-      {/* SIZE WARNING MODAL */}
       <Modal visible={showSizeWarning} transparent animationType="fade" onRequestClose={() => setShowSizeWarning(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 460, overflow: 'hidden' }}>
@@ -971,9 +1165,7 @@ export default function PdfViewerPage() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>File Too Large</Text>
-                <Text style={{ fontSize: 11, color: '#92400E' }}>
-                  Max allowed size is {MAX_FILE_SIZE_MB} MB per file
-                </Text>
+                <Text style={{ fontSize: 11, color: '#92400E' }}>Max allowed size is {MAX_FILE_SIZE_MB} MB per file</Text>
               </View>
             </View>
             <View style={{ padding: 16 }}>
@@ -996,81 +1188,6 @@ export default function PdfViewerPage() {
                 style={{ backgroundColor: '#2563EB', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4 }}
               >
                 <Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>OK, I'll Reduce Size</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* NEW CUSTOMER MODAL */}
-      <Modal visible={showCustomerModal} transparent animationType="fade" onRequestClose={() => setShowCustomerModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
-          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 4, width: '100%', maxWidth: 420 }}>
-            <View style={{ backgroundColor: '#EDE9FE', padding: 14, borderBottomWidth: 1, borderColor: '#DDD6FE' }}>
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>Create New Customer</Text>
-              <Text style={{ fontSize: 11, color: '#6D28D9' }}>Add a customer to organize PDFs</Text>
-            </View>
-            <View style={{ padding: 16, gap: 10 }}>
-              {customerError ? (
-                <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', padding: 8, borderRadius: 4 }}>
-                  <Text style={{ color: '#B91C1C', fontSize: 11 }}>❌ {customerError}</Text>
-                </View>
-              ) : null}
-              <View>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Name *</Text>
-                <input
-                  value={newCustomerName}
-                  onChange={(e: any) => setNewCustomerName(e.target.value)}
-                  placeholder="e.g. Ahmed Ali"
-                  style={{
-                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
-                    borderRadius: 4, fontSize: 12, outline: 'none',
-                  } as any}
-                />
-              </View>
-              <View>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Phone</Text>
-                <input
-                  value={newCustomerPhone}
-                  onChange={(e: any) => setNewCustomerPhone(e.target.value)}
-                  placeholder="Optional"
-                  style={{
-                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
-                    borderRadius: 4, fontSize: 12, outline: 'none',
-                  } as any}
-                />
-              </View>
-              <View>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569', marginBottom: 4 }}>Notes</Text>
-                <input
-                  value={newCustomerNotes}
-                  onChange={(e: any) => setNewCustomerNotes(e.target.value)}
-                  placeholder="Optional"
-                  style={{
-                    width: '100%', padding: 8, borderWidth: 1, borderColor: '#CBD5E1',
-                    borderRadius: 4, fontSize: 12, outline: 'none',
-                  } as any}
-                />
-              </View>
-            </View>
-            <View style={{ padding: 12, borderTopWidth: 1, borderColor: '#E2E8F0', flexDirection: 'row', justifyContent: 'flex-end', gap: 6, backgroundColor: '#F8FAFC' }}>
-              <Pressable
-                onPress={() => { setShowCustomerModal(false); setCustomerError(''); }}
-                disabled={creatingCustomer}
-                style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4 }}
-              >
-                <Text style={{ fontSize: 11, fontWeight: '600', color: '#475569' }}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={createCustomer}
-                disabled={creatingCustomer}
-                style={{ backgroundColor: creatingCustomer ? '#A78BFA' : '#7C3AED', paddingVertical: 6, paddingHorizontal: 14, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }}
-              >
-                {creatingCustomer ? (
-                  <><ActivityIndicator size="small" color="#FFFFFF" /><Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Creating...</Text></>
-                ) : (
-                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#FFFFFF' }}>Create</Text>
-                )}
               </Pressable>
             </View>
           </View>
