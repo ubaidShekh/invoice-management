@@ -12,12 +12,19 @@ import {
   View,
 } from 'react-native';
 
-const API_BASE_URL = 'https://invoice-python-api-q2oq.onrender.com';
+const API_BASE_URL = 'https://reprocess-switch-subdivide.ngrok-free.dev';
 const GREEN = '#166534';
 const BLACK = '#000000';
 const WHITE = '#FFFFFF';
 
-// PDF columns (unchanged for download)
+// ✅ Ngrok bypass axios instance
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'ngrok-skip-browser-warning': 'true',
+  },
+});
+
 const PDF_COLUMN_DEFINITIONS = [
   { key: 'index', label: '#', flex: 0.5, align: 'center' },
   { key: 'date', label: 'DATE', flex: 1.2, align: 'center' },
@@ -31,7 +38,6 @@ const PDF_COLUMN_DEFINITIONS = [
   { key: 'action', label: 'ACTION', flex: 1, align: 'center' },
 ] as const;
 
-// UI Table columns (compact)
 const UI_COLUMNS = [
   { key: 'index', label: '#', flex: 0.5, align: 'center' },
   { key: 'date', label: 'DATE', flex: 1.5, align: 'center' },
@@ -97,22 +103,19 @@ export default function ReportPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
-  // Customer selection layer
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
-  // Filter states
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [exactDate, setExactDate] = useState<string>('');
 
-  // Modal state
   const [selectedItem, setSelectedItem] = useState<ReportItem | null>(null);
 
   const fetchCustomers = async () => {
     try {
       setCustomersLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/customers`);
+      const response = await api.get('/api/customers');
       setCustomers(response.data);
     } catch (err: any) {
       console.log('Customers fetch error:', err.message);
@@ -127,7 +130,7 @@ export default function ReportPage() {
     try {
       setLoading(true);
       setError('');
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-viewer-reports?status=delivered&customer_id=${cid}`);
+      const response = await api.get(`/api/pdf-viewer-reports?status=delivered&customer_id=${cid}`);
       setItems(Array.isArray(response.data?.items) ? response.data.items : []);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch reports.');
@@ -171,7 +174,7 @@ export default function ReportPage() {
         amount: values.amount !== undefined ? values.amount : item.amount,
       };
 
-      await axios.patch(`${API_BASE_URL}/api/pdf-viewer-delivery-items/${item.id}/report`, payload);
+      await api.patch(`/api/pdf-viewer-delivery-items/${item.id}/report`, payload);
       setItems(previous => previous.map(existing =>
         existing.id === item.id ? { ...existing, ...payload } : existing,
       ));
@@ -204,7 +207,6 @@ export default function ReportPage() {
     return edits[field] !== undefined ? edits[field] : item[field];
   };
 
-  // Filter Logic
   const filteredItems = useMemo(() => {
     if (filterType === 'all') return items;
 
@@ -278,7 +280,6 @@ export default function ReportPage() {
     ? new Date().toISOString().slice(0, 10)
     : firstDateKey;
 
-  // PDF Build Logic (Unchanged)
   const buildPdfHtml = () => {
     const columnWidths = PDF_COLUMN_DEFINITIONS
       .map(column => `${(column.flex / TOTAL_PDF_COLUMN_FLEX) * 100}%`)
@@ -470,7 +471,6 @@ export default function ReportPage() {
 
   let runningIndex = 0;
 
-  // ================= CUSTOMER LIST VIEW =================
   if (!selectedCustomer) {
     return (
       <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, backgroundColor: '#F3F4F6' }}>
@@ -513,7 +513,6 @@ export default function ReportPage() {
     );
   }
 
-  // ================= EXISTING REPORT VIEW (CUSTOMER-SCOPED) =================
   return (
     <View style={{ flex: 1, minHeight: '100vh' as any, padding: 24, backgroundColor: '#F3F4F6' }}>
       <View style={{ width: '100%', maxWidth: 1100, alignSelf: 'center' }}>
@@ -551,7 +550,6 @@ export default function ReportPage() {
           </View>
         </View>
 
-        {/* Filter Bar */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16, backgroundColor: WHITE, padding: 12, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center' }}>
           <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151' }}>Filter:</Text>
           {(['all', 'weekly', 'monthly', 'exact'] as FilterType[]).map(type => (
@@ -660,7 +658,6 @@ export default function ReportPage() {
         </View>
       </View>
 
-      {/* Detail Modal */}
       <Modal visible={selectedItem !== null} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{ backgroundColor: WHITE, borderRadius: 4, width: '100%', maxWidth: 600, padding: 24, boxShadow: '0 10px 25px rgba(0,0,0,0.2)' } as any}>

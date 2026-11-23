@@ -2,9 +2,17 @@ import axios from 'axios';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
-const API_BASE_URL = 'https://invoice-python-api-q2oq.onrender.com';
+const API_BASE_URL = 'https://reprocess-switch-subdivide.ngrok-free.dev';
 const MAX_FILE_SIZE_MB = 100;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+// ✅ Ngrok bypass axios instance
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'ngrok-skip-browser-warning': 'true',
+  },
+});
 
 type Product = { model: string; size: string; product_code?: string; };
 type InvoiceItem = { _id: string; invoice_number: string; products: Product[]; selected_product: Product; name: string; };
@@ -60,7 +68,7 @@ export default function PdfViewerPage() {
   const fetchCustomers = async () => {
     try {
       setCustomerLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/customers`);
+      const response = await api.get('/api/customers');
       setCustomers(response.data);
     } catch (err) {
       setError('Failed to fetch customers.');
@@ -75,7 +83,7 @@ export default function PdfViewerPage() {
     if (!newCustomer.name.trim()) return;
     try {
       setCreatingCustomer(true);
-      await axios.post(`${API_BASE_URL}/api/customers`, newCustomer);
+      await api.post('/api/customers', newCustomer);
       setShowCreateCustomer(false);
       setNewCustomer({ name: '', company: '', phone: '', email: '' });
       await fetchCustomers();
@@ -90,7 +98,7 @@ export default function PdfViewerPage() {
   const fetchPdfBatches = async (customerId: string) => {
     try {
       setBatchesLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-batches?customer_id=${customerId}`);
+      const response = await api.get(`/api/pdf-batches?customer_id=${customerId}`);
       setPdfBatches(response.data);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch PDF batches.');
@@ -103,9 +111,9 @@ export default function PdfViewerPage() {
     try {
       setLoading(true);
       setError('');
-      let url = `${API_BASE_URL}/api/pdf-files?customer_id=${customerId}`;
+      let url = `/api/pdf-files?customer_id=${customerId}`;
       if (batchId) url += `&batch_id=${batchId}`;
-      const response = await axios.get(url);
+      const response = await api.get(url);
       setPdfs(response.data);
       setSelectedFilenames([]);
     } catch (err: any) {
@@ -154,7 +162,7 @@ export default function PdfViewerPage() {
       selectedFiles.forEach((file) => formData.append('invoices', file, file.name));
       formData.append('customer_id', selectedCustomer._id);
 
-      const response = await axios.post(`${API_BASE_URL}/upload_pdf_viewer`, formData, {
+      const response = await api.post('/upload_pdf_viewer', formData, {
         timeout: 300000,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -198,7 +206,7 @@ export default function PdfViewerPage() {
       const allInvoices: PrintAllInvoice[] = [];
       for (const pdf of pdfs) {
         try {
-          const response = await axios.get(`${API_BASE_URL}/api/pdf-invoice-details/${encodeURIComponent(pdf.filename)}`);
+          const response = await api.get(`/api/pdf-invoice-details/${encodeURIComponent(pdf.filename)}`);
           for (const inv of response.data.invoices) {
             const products = inv.products || [];
             const selected = products[0] || { model: 'N/A', size: 'N/A' };
@@ -241,8 +249,8 @@ export default function PdfViewerPage() {
         size: inv.selected_product?.size || 'N/A',
       }));
 
-      const response = await axios.post(
-        `${API_BASE_URL}/api/pdf-print-all-with-selections`,
+      const response = await api.post(
+        '/api/pdf-print-all-with-selections',
         { selections },
         { responseType: 'blob', timeout: 180000 }
       );
@@ -294,8 +302,8 @@ export default function PdfViewerPage() {
         size: inv.selected_product?.size || 'N/A',
       }));
 
-      const response = await axios.post(
-        `${API_BASE_URL}/api/pdf-print-all-with-selections`,
+      const response = await api.post(
+        '/api/pdf-print-all-with-selections',
         { selections },
         { responseType: 'blob', timeout: 180000 }
       );
@@ -326,7 +334,7 @@ export default function PdfViewerPage() {
     setGeneratedPdfUrl(null);
     setPdfError(false);
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/pdf-invoice-details/${encodeURIComponent(filename)}`);
+      const response = await api.get(`/api/pdf-invoice-details/${encodeURIComponent(filename)}`);
       setInvoices(response.data.invoices);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load PDF details.');
@@ -352,8 +360,8 @@ export default function PdfViewerPage() {
         model: inv.selected_product?.model || 'N/A',
         size: inv.selected_product?.size || 'N/A',
       }));
-      const response = await axios.post(
-        `${API_BASE_URL}/api/pdf-with-footer/${encodeURIComponent(selectedPdf)}`,
+      const response = await api.post(
+        `/api/pdf-with-footer/${encodeURIComponent(selectedPdf)}`,
         { selections },
         { responseType: 'blob', timeout: 120000 }
       );
@@ -379,8 +387,8 @@ export default function PdfViewerPage() {
         model: inv.selected_product?.model || 'N/A',
         size: inv.selected_product?.size || 'N/A',
       }));
-      const response = await axios.post(
-        `${API_BASE_URL}/api/pdf-with-footer/${encodeURIComponent(selectedPdf)}`,
+      const response = await api.post(
+        `/api/pdf-with-footer/${encodeURIComponent(selectedPdf)}`,
         { selections },
         { responseType: 'blob', timeout: 120000 }
       );
@@ -428,7 +436,7 @@ export default function PdfViewerPage() {
     try {
       setDeleting(true);
       setError('');
-      const response = await axios.post(`${API_BASE_URL}/api/pdf-files/delete-bulk`, { filenames: selectedFilenames });
+      const response = await api.post('/api/pdf-files/delete-bulk', { filenames: selectedFilenames });
       setMessage(`✅ ${response.data.message}`);
       setShowDeleteModal(false);
       setSelectedFilenames([]);

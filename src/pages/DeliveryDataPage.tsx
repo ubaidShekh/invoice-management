@@ -16,7 +16,15 @@ type Item = {
 
 type Customer = { _id: string; name: string; phone: string; };
 
-const API_URL = 'https://invoice-python-api-q2oq.onrender.com';
+const API_URL = 'https://reprocess-switch-subdivide.ngrok-free.dev';
+
+// ✅ Ngrok bypass axios instance
+const api = axios.create({
+  baseURL: API_URL,
+  headers: {
+    'ngrok-skip-browser-warning': 'true',
+  },
+});
 
 export default function DeliveryDataPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -34,7 +42,7 @@ export default function DeliveryDataPage() {
   const fetchCustomers = async () => {
     try {
       setCustomersLoading(true);
-      const response = await axios.get(`${API_URL}/api/customers`);
+      const response = await api.get('/api/customers');
       setCustomers(response.data);
     } catch (error: any) {
       console.log('Customers fetch error:', error.message);
@@ -50,7 +58,7 @@ export default function DeliveryDataPage() {
     if (!cid) return;
     try {
       setLoading(true);
-      const response = await axios.get(`${API_URL}/api/pdf-viewer-delivery-items?customer_id=${cid}`);
+      const response = await api.get(`/api/pdf-viewer-delivery-items?customer_id=${cid}`);
       setItems(response.data);
       setMessage('');
     } catch (error: any) {
@@ -82,7 +90,7 @@ export default function DeliveryDataPage() {
     try {
       setDelivering(true);
       setMessage('');
-      const response = await axios.post(`${API_URL}/api/pdf-viewer-delivery-items/scan`, {
+      const response = await api.post('/api/pdf-viewer-delivery-items/scan', {
         barcode: code,
         customer_id: selectedCustomer._id,
       });
